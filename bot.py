@@ -488,7 +488,7 @@ def start_web_server():
     print(f"Started web server on port {port}")
 
 # Função principal
-def main():
+async def main():
     # Iniciar servidor web para o Render
     start_web_server()
     
@@ -515,7 +515,8 @@ def main():
     asyncio.create_task(verificar_assinaturas_automaticamente(bot))
     
     # Iniciar o polling
-    application.run_polling()
+    await application.run_polling()
 
 if __name__ == "__main__":
-    main()
+    # Executar a função main assíncrona
+    asyncio.run(main())
