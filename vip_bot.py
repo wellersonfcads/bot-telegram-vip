@@ -356,7 +356,10 @@ async def remover_usuarios_expirados(context: ContextTypes.DEFAULT_TYPE):
 def configurar_verificacao_automatica(application):
     # Verificar a cada hora
     job_queue = application.job_queue
-    job_queue.run_repeating(remover_usuarios_expirados, interval=3600, first=10)
+    if job_queue is not None:
+        job_queue.run_repeating(remover_usuarios_expirados, interval=3600, first=10)
+    else:
+        logger.warning("JobQueue não disponível. Verificação automática desabilitada.")
 
 # Função principal
 def main():
