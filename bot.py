@@ -93,7 +93,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         "🔞 *VERIFICAÇÃO DE IDADE* 🔞\n\n"
-        "Para continuar, preciso confirmar:\n"
+        "Oi amor! Antes de continuarmos, preciso confirmar:\n"
         "Você tem 18 anos ou mais?",
         reply_markup=reply_markup,
         parse_mode='Markdown'
@@ -106,7 +106,7 @@ async def handle_idade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if query.data == "idade_nao":
         await query.edit_message_text(
-            "❌ Desculpe, este conteúdo é apenas para maiores de 18 anos.\n\n"
+            "❌ Desculpe amor, meu conteúdo é apenas para maiores de 18 anos.\n\n"
             "Volte quando completar 18 anos! 😊"
         )
         return
@@ -168,10 +168,10 @@ async def mostrar_acesso_vip(context: ContextTypes.DEFAULT_TYPE):
         chat_id=chat_id,
         text="💎 *Quer ter acesso a todo meu conteúdo completo no VIP?*\n\n"
              "No meu grupo VIP você vai ter:\n"
-             "🔥 Fotos e vídeos exclusivos\n"
+             "🔥 Minhas fotos e vídeos exclusivos\n"
              "💕 Conteúdo que não posto em lugar nenhum\n"
              "🎯 Acesso direto comigo\n"
-             "✨ Surpresas especiais só para membros VIP\n\n"
+             "✨ Surpresas especiais só para meus VIPs\n\n"
              "Clica no botão abaixo para ver os planos disponíveis! 👇",
         reply_markup=reply_markup,
         parse_mode='Markdown'
@@ -191,11 +191,11 @@ async def mostrar_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
-        "💎 *PLANOS VIP DISPONÍVEIS*\n\n"
-        "Escolha o plano que mais combina com você:\n\n"
-        "✨ Todos os planos incluem acesso completo ao conteúdo exclusivo!\n"
+        "💎 *MEUS PLANOS VIP DISPONÍVEIS*\n\n"
+        "Escolhe o plano que mais combina com você, amor:\n\n"
+        "✨ Todos os planos incluem acesso completo ao meu conteúdo exclusivo!\n"
         "🔥 Quanto maior o plano, melhor o custo-benefício!\n\n"
-        "Clique no plano desejado:",
+        "Clica no plano desejado:",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
@@ -222,12 +222,12 @@ async def detalhes_plano(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💎 *{plano['nome']}*\n\n"
         f"💰 Valor: *{plano['valor']}*\n"
         f"⏰ Duração: *{plano['dias']} dias*\n\n"
-        f"🔥 *O que você vai receber:*\n"
-        f"✅ Acesso total ao grupo VIP\n"
+        f"🔥 *O que você vai receber, amor:*\n"
+        f"✅ Acesso total ao meu grupo VIP\n"
         f"✅ Todo meu conteúdo exclusivo\n"
-        f"✅ Fotos e vídeos que não posto em lugar nenhum\n"
+        f"✅ Minhas fotos e vídeos que não posto em lugar nenhum\n"
         f"✅ Contato direto comigo\n"
-        f"✅ Novos conteúdos adicionados regularmente\n\n"
+        f"✅ Meus novos conteúdos adicionados regularmente\n\n"
         f"Clique em 'Gerar PIX' para continuar! 👇",
         reply_markup=reply_markup,
         parse_mode='Markdown'
@@ -269,13 +269,13 @@ async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📋 *Código PIX (Copia e Cola):*\n"
         f"`{pix_code}`\n\n"
         f"📱 *Como pagar:*\n"
-        f"1️⃣ Clique em 'Copiar PIX' abaixo\n"
-        f"2️⃣ Abra seu app bancário\n"
-        f"3️⃣ Escolha PIX > Copia e Cola\n"
-        f"4️⃣ Cole o código copiado\n"
-        f"5️⃣ Confirme o pagamento\n"
-        f"6️⃣ Clique em 'Já Paguei' para enviar comprovante\n\n"
-        f"💕 Estou ansiosa para te receber no VIP!",
+        f"1️⃣ Clica em 'Copiar PIX' abaixo\n"
+        f"2️⃣ Abre seu app bancário\n"
+        f"3️⃣ Escolhe PIX > Copia e Cola\n"
+        f"4️⃣ Cola o código copiado\n"
+        f"5️⃣ Confirma o pagamento\n"
+        f"6️⃣ Clica em 'Já Paguei' para me enviar o comprovante\n\n"
+        f"💕 Estou ansiosa para te receber no meu VIP, amor!",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
@@ -313,11 +313,11 @@ async def ja_paguei(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.edit_message_text(
         "📎 *Envio de Comprovante*\n\n"
-        "Perfeito! Agora preciso do seu comprovante de pagamento para liberar seu acesso.\n\n"
-        "📱 *Como enviar:*\n"
-        "1️⃣ Clique em 'Enviar Comprovante'\n"
-        "2️⃣ Tire uma foto ou screenshot do comprovante\n"
-        "3️⃣ Envie a imagem\n\n"
+        "Perfeito, amor! Agora preciso do seu comprovante de pagamento para liberar seu acesso ao meu VIP.\n\n"
+        "📱 *Como me enviar:*\n"
+        "1️⃣ Clica em 'Enviar Comprovante'\n"
+        "2️⃣ Tira uma foto ou screenshot do comprovante\n"
+        "3️⃣ Me envia a imagem\n\n"
         "✅ Assim que eu verificar, vou liberar seu acesso imediatamente!\n\n"
         "💕 Obrigada pela confiança, amor!",
         reply_markup=reply_markup,
@@ -333,12 +333,12 @@ async def solicitar_comprovante(update: Update, context: ContextTypes.DEFAULT_TY
     
     await query.edit_message_text(
         "📎 *Aguardando Comprovante*\n\n"
-        "Agora é só enviar a foto ou screenshot do seu comprovante de pagamento!\n\n"
+        "Agora é só me enviar a foto ou screenshot do seu comprovante de pagamento!\n\n"
         "📸 Pode ser:\n"
         "• Screenshot da tela de confirmação\n"
         "• Foto do comprovante\n"
         "• Print do extrato\n\n"
-        "💕 Estou aguardando aqui para liberar seu acesso!",
+        "💕 Estou aguardando aqui para liberar seu acesso ao meu VIP!",
         parse_mode='Markdown'
     )
 
@@ -371,8 +371,8 @@ async def receber_comprovante(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Envia confirmação para o usuário
     await update.message.reply_text(
         "✅ *Comprovante Recebido!*\n\n"
-        "Perfeito! Recebi seu comprovante e vou verificar agora mesmo.\n\n"
-        "⏰ Em poucos minutos você receberá o link de acesso ao grupo VIP!\n\n"
+        "Perfeito, amor! Recebi seu comprovante e vou verificar agora mesmo.\n\n"
+        "⏰ Em poucos minutos você receberá o link de acesso ao meu grupo VIP!\n\n"
         "💕 Obrigada pela paciência, amor!",
         parse_mode='Markdown'
     )
@@ -467,16 +467,16 @@ async def processar_aprovacao(update: Update, context: ContextTypes.DEFAULT_TYPE
             await context.bot.send_message(
                 chat_id=user_id,
                 text=f"🎉 *PAGAMENTO APROVADO!*\n\n"
-                     f"Seja bem-vinda ao meu VIP, amor! 💕\n\n"
-                     f"💎 Plano: {plano['nome']}\n"
+                     f"Seja bem-vindo ao meu VIP, amor! 💕\n\n"
+                     f"💎 Seu plano: {plano['nome']}\n"
                      f"⏰ Válido até: {data_expiracao.strftime('%d/%m/%Y')}\n\n"
-                     f"🔗 *Link de acesso:*\n{link_convite.invite_link}\n\n"
-                     f"⚠️ *Atenção:*\n"
+                     f"🔗 *Link de acesso ao meu VIP:*\n{link_convite.invite_link}\n\n"
+                     f"⚠️ *Atenção, amor:*\n"
                      f"- Este link expira em 7 dias e só pode ser usado uma vez.\n"
-                     f"- Apenas você está autorizado a entrar no canal.\n"
+                     f"- Apenas você está autorizado(a) a entrar no meu canal.\n"
                      f"- Qualquer pessoa não autorizada que tentar entrar será removida automaticamente.\n\n"
-                     f"✨ Aproveite todo o conteúdo exclusivo!\n"
-                     f"💕 Qualquer dúvida, é só chamar!",
+                     f"✨ Aproveite todo meu conteúdo exclusivo!\n"
+                     f"💕 Qualquer dúvida, é só me chamar!",
                 parse_mode='Markdown'
             )
             
@@ -512,8 +512,8 @@ async def processar_aprovacao(update: Update, context: ContextTypes.DEFAULT_TYPE
         await context.bot.send_message(
             chat_id=user_id,
             text="❌ *Pagamento não aprovado*\n\n"
-                 "Infelizmente não consegui confirmar seu pagamento.\n\n"
-                 "💬 Entre em contato comigo para resolver esta questão.\n"
+                 "Infelizmente não consegui confirmar seu pagamento, amor.\n\n"
+                 "💬 Entre em contato comigo para resolvermos esta questão.\n"
                  "🔄 Ou tente fazer um novo pagamento.",
             parse_mode='Markdown'
         )
@@ -722,8 +722,8 @@ async def remover_usuario_nao_autorizado(user_id, bot):
             await bot.send_message(
                 chat_id=user_id,
                 text="⚠️ *Acesso não autorizado*\n\n"
-                     "Você foi removido do canal VIP porque seu acesso não foi autorizado.\n\n"
-                     "Para obter acesso, você precisa adquirir um plano VIP através do bot.\n"
+                     "Você foi removido do meu canal VIP porque seu acesso não foi autorizado.\n\n"
+                     "Para obter acesso, você precisa adquirir um dos meus planos VIP através do bot.\n"
                      "Use o comando /start para iniciar o processo de compra.",
                 parse_mode='Markdown'
             )
