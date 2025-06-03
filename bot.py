@@ -514,9 +514,22 @@ async def main():
     # Iniciar a verificação automática de assinaturas em segundo plano
     asyncio.create_task(verificar_assinaturas_automaticamente(bot))
     
-    # Iniciar o polling
-    await application.run_polling()
+    # Iniciar o polling com close_loop=False para evitar o erro "Cannot close a running event loop"
+    await application.run_polling(close_loop=False)
 
 if __name__ == "__main__":
-    # Executar a função main assíncrona
-    asyncio.run(main())
+    # Configurar o loop de eventos
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    try:
+        # Executar a função main assíncrona
+        loop.run_until_complete(main())
+        # Manter o loop rodando para o servidor web
+        loop.run_forever()
+    except KeyboardInterrupt:
+        # Encerrar graciosamente quando Ctrl+C for pressionado
+        print("Bot encerrado pelo usuário")
+    finally:
+        # Limpar recursos
+        loop.close()
