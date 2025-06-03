@@ -413,7 +413,17 @@ async def processar_aprovacao(update: Update, context: ContextTypes.DEFAULT_TYPE
     data_parts = query.data.split("_")
     acao = data_parts[0]  # aprovar ou rejeitar
     user_id = int(data_parts[1])
-    plano_key = data_parts[2]
+    
+    # Reconstruir a chave do plano corretamente
+    # Se tiver mais partes, é porque o plano tem underscore (como 1_mes)
+    plano_key = "_".join(data_parts[2:])
+    
+    # Verificar se a chave existe no dicionário PLANOS
+    if plano_key not in PLANOS:
+        await query.edit_message_text(
+            f"❌ Erro: Plano '{plano_key}' não encontrado. Por favor, contate o suporte."
+        )
+        return
     
     plano = PLANOS[plano_key]
     
