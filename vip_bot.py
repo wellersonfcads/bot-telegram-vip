@@ -4,9 +4,8 @@ import asyncio
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-import schedule
+import threading
 import time
-from threading import Thread
 
 # Configuração do logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -15,7 +14,8 @@ logger = logging.getLogger(__name__)
 # Configurações do bot
 TOKEN = "7963030995:AAE8K5RIFJpaOhxLnDxJ4k614wnq4n549AQ"
 CANAL_VIP_LINK = "https://t.me/+9TBR6fK429tiMmRh"
-CANAL_VIP_ID = "-1002280243232"  # ID do seu canal VIP
+CANAL_VIP_ID = "-1002280243232"
+SEU_USER_ID = 6150001511
 
 # Dados dos planos
 PLANOS = {
@@ -44,6 +44,9 @@ PLANOS = {
         "pix": "00020101021126580014br.gov.bcb.pix01369cf720a7-fa96-4b33-8a37-76a401089d5f5204000053039865406289.905802BR5919AZ FULL ADMINISTRAC6008BRASILIA62070503***6304CD13"
     }
 }
+
+# Variável global para o bot
+bot_app = None
 
 # Inicialização do banco de dados
 def init_db():
@@ -192,7 +195,6 @@ async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE, plano_id
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # Aqui você pode gerar um QR Code se quiser
     texto = (
         f"💳 *PIX PARA PAGAMENTO*\n\n"
         f"📋 **Plano:** {plano['nome']}\n"
@@ -241,7 +243,7 @@ async def solicitar_acesso(update: Update, context: ContextTypes.DEFAULT_TYPE, p
     # Notificar administrador sobre nova venda
     try:
         await context.bot.send_message(
-            chat_id=SEU_USER_ID,  # Substitua pelo seu user ID
+            chat_id=SEU_USER_ID,
             text=f"💰 NOVA VENDA!\n\n"
                  f"👤 Usuário: @{user.username or 'Sem username'}\n"
                  f"📋 Plano: {plano['nome']}\n"
@@ -289,7 +291,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Comandos administrativos
 async def admin_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Verificar se é admin (substitua pelo seu user ID)
     if update.effective_user.id != SEU_USER_ID:
         return
     
@@ -314,22 +315,32 @@ async def admin_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(texto, parse_mode='Markdown')
 
-# Função para remover usuários expirados
-async def remover_usuarios_expirados(context: ContextTypes.DEFAULT_TYPE):
-    usuarios_expirados = verificar_usuarios_expirados()
-    
-    if not usuarios_expirados:
-        return
-    
+# Função para verificação automática em thread separada
+def verificacao_automatica():
+    while True:
+        try:
+            usuarios_expirados = verificar_usuarios_expirados()
+            
+            if usuarios_expirados and bot_app:
+                asyncio.run_coroutine_threadsafe(
+                    processar_usuarios_expirados(usuarios_expirados),
+                    bot_app._application._loop if hasattr(bot_app, '_application') else asyncio.get_event_loop()
+                )
+        except Exception as e:
+            logger.error(f"Erro na verificação automática: {e}")
+        
+        # Esperar 1 hora
+        time.sleep(3600)
+
+async def processar_usuarios_expirados(usuarios_expirados):
     for user_id, username, plano in usuarios_expirados:
         try:
             # Remover do canal VIP
-            await context.bot.ban_chat_member(CANAL_VIP_ID, user_id)
-            # Desbanir para que possa entrar novamente se comprar outro plano
-            await context.bot.unban_chat_member(CANAL_VIP_ID, user_id)
+            await bot_app.bot.ban_chat_member(CANAL_VIP_ID, user_id)
+            await bot_app.bot.unban_chat_member(CANAL_VIP_ID, user_id)
             
             # Notificar o usuário
-            await context.bot.send_message(
+            await bot_app.bot.send_message(
                 chat_id=user_id,
                 text=f"⏰ Seu {PLANOS[plano]['nome']} expirou!\n\n"
                      f"Para continuar tendo acesso ao conteúdo VIP, "
@@ -342,47 +353,38 @@ async def remover_usuarios_expirados(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Erro ao remover usuário {user_id}: {e}")
     
-    # Notificar admin sobre remoções
+    # Notificar admin
     if usuarios_expirados:
         try:
-            await context.bot.send_message(
+            await bot_app.bot.send_message(
                 chat_id=SEU_USER_ID,
                 text=f"🔄 {len(usuarios_expirados)} usuários removidos por expiração de plano."
             )
         except:
             pass
 
-# Configurar verificação automática
-def configurar_verificacao_automatica(application):
-    # Verificar a cada hora
-    job_queue = application.job_queue
-    if job_queue is not None:
-        job_queue.run_repeating(remover_usuarios_expirados, interval=3600, first=10)
-    else:
-        logger.warning("JobQueue não disponível. Verificação automática desabilitada.")
-
 # Função principal
 def main():
+    global bot_app
+    
     # Inicializar banco de dados
     init_db()
     
     # Criar aplicação
-    application = Application.builder().token(TOKEN).build()
+    bot_app = Application.builder().token(TOKEN).build()
     
     # Configurar handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("usuarios", admin_usuarios))
-    application.add_handler(CallbackQueryHandler(button_handler))
+    bot_app.add_handler(CommandHandler("start", start))
+    bot_app.add_handler(CommandHandler("usuarios", admin_usuarios))
+    bot_app.add_handler(CallbackQueryHandler(button_handler))
     
-    # Configurar verificação automática
-    configurar_verificacao_automatica(application)
+    # Iniciar thread de verificação automática
+    verificacao_thread = threading.Thread(target=verificacao_automatica, daemon=True)
+    verificacao_thread.start()
     
     # Iniciar bot
     logger.info("Bot iniciado!")
-    application.run_polling()
-
-# Configurações que você precisa alterar:
-SEU_USER_ID = 6150001511  # Seu user ID do Telegram
+    bot_app.run_polling()
 
 if __name__ == '__main__':
     main()
