@@ -1,9 +1,14 @@
-import os
 import sqlite3
 import logging
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    JobQueue
+)
 
 # Configurações
 TOKEN = "7963030995:AAE8K5RIFJpaOhxLnDxJ4k614wnq4n549AQ"
@@ -40,7 +45,10 @@ PLANS = {
 }
 
 # Logging
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
 class Database:
@@ -82,11 +90,12 @@ class Database:
     
     def get_expired_users(self):
         cursor = self.conn.cursor()
+        now = datetime.now().isoformat()
         cursor.execute('''
             SELECT user_id, username, plan_type FROM users 
             WHERE status = 'active' AND 
-            date(last_payment_date, '+' || (SELECT days FROM plans WHERE id = plan_type) || ' days') < date('now')
-        ''')
+            date(last_payment_date, '+' || (SELECT days FROM plans WHERE id = plan_type) || ' days') < ?
+        ''', (now,))
         return cursor.fetchall()
     
     def remove_user(self, user_id):
@@ -194,14 +203,14 @@ async def check_expired_subscriptions(context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Erro ao remover usuário {user_id}: {e}")
 
 def main():
-    # Cria aplicação
+    # Cria aplicação com JobQueue
     application = Application.builder().token(TOKEN).build()
     
     # Handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(handle_plans))
     
-    # Job para verificar expirações a cada hora
+    # Configura JobQueue
     job_queue = application.job_queue
     job_queue.run_repeating(check_expired_subscriptions, interval=3600, first=10)
     
