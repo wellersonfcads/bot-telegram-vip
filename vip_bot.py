@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 # Configurações do bot
 TOKEN = "7963030995:AAE8K5RIFJpaOhxLnDxJ4k614wnq4n549AQ"
 CANAL_VIP_LINK = "https://t.me/+9TBR6fK429tiMmRh"
-CANAL_VIP_ID = "@oiclarinhaalves"  # Substitua pelo ID real do canal VIP
+CANAL_VIP_ID = "-1002280243232"  # ID do seu canal VIP
 
 # Dados dos planos
 PLANOS = {
@@ -379,7 +379,7 @@ def main():
     application.run_polling()
 
 # Configurações que você precisa alterar:
-SEU_USER_ID = 123456789  # Substitua pelo seu user ID do Telegram
+SEU_USER_ID = 6150001511  # Seu user ID do Telegram
 
 if __name__ == '__main__':
     main()
