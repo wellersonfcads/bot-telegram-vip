@@ -279,11 +279,23 @@ async def check_expired_subscriptions():
 async def health_check(request):
     return web.Response(text="Bot is running!")
 
+async def webhook_handler(request):
+    """Handler para webhook do Telegram"""
+    try:
+        update_data = await request.json()
+        update = Update.de_json(update_data, subscription_bot.bot)
+        await subscription_bot.application.process_update(update)
+        return web.Response(text="OK")
+    except Exception as e:
+        logger.error(f"Erro no webhook: {e}")
+        return web.Response(text="Error", status=400)
+
 async def init_web_server():
     """Inicializa servidor web para health check"""
     app = web.Application()
     app.router.add_get('/', health_check)
     app.router.add_get('/health', health_check)
+    app.router.add_post('/webhook', webhook_handler)
     
     runner = web.AppRunner(app)
     await runner.setup()
@@ -305,6 +317,9 @@ async def main():
         subscription_bot.application.add_handler(CommandHandler("start", start))
         subscription_bot.application.add_handler(CallbackQueryHandler(button_callback))
         
+        # Inicializa o bot
+        await subscription_bot.application.initialize()
+        
         # Inicializa servidor web
         await init_web_server()
         
@@ -313,13 +328,31 @@ async def main():
         
         # Inicia o bot
         logger.info("Bot iniciado com sucesso!")
-        await subscription_bot.application.run_polling(
+        await subscription_bot.application.start()
+        await subscription_bot.application.updater.start_polling(
             allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=True
         )
         
+        # Mantém rodando
+        while True:
+            await asyncio.sleep(1)
+        
     except Exception as e:
         logger.error(f"Erro ao iniciar bot: {e}")
+    finally:
+        if subscription_bot.application:
+            await subscription_bot.application.stop()
+            await subscription_bot.application.shutdown()
+
+def run_bot():
+    """Executa o bot de forma segura"""
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Bot interrompido pelo usuário")
+    except Exception as e:
+        logger.error(f"Erro fatal: {e}")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    run_bot()
