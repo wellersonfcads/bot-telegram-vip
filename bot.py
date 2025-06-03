@@ -7,6 +7,9 @@ import telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ChatMemberHandler, filters, ContextTypes
 import os
+import http.server
+import socketserver
+import urllib.request
 
 # Configuração de logging
 logging.basicConfig(
@@ -437,7 +440,7 @@ async def processar_aprovacao(update: Update, context: ContextTypes.DEFAULT_TYPE
             link_convite = await context.bot.create_chat_invite_link(
                 chat_id=CANAL_VIP_ID,
                 member_limit=1,
-                expire_date=int(time.time()) + 3600  # Expira em 1 hora
+                expire_date=int(time.time()) + 604800  # Expira em 7 dias
             )
             
             # Adiciona ao banco de dados
@@ -469,7 +472,7 @@ async def processar_aprovacao(update: Update, context: ContextTypes.DEFAULT_TYPE
                      f"⏰ Válido até: {data_expiracao.strftime('%d/%m/%Y')}\n\n"
                      f"🔗 *Link de acesso:*\n{link_convite.invite_link}\n\n"
                      f"⚠️ *Atenção:*\n"
-                     f"- Este link expira em 1 hora e só pode ser usado uma vez.\n"
+                     f"- Este link expira em 7 dias e só pode ser usado uma vez.\n"
                      f"- Apenas você está autorizado a entrar no canal.\n"
                      f"- Qualquer pessoa não autorizada que tentar entrar será removida automaticamente.\n\n"
                      f"✨ Aproveite todo o conteúdo exclusivo!\n"
@@ -760,6 +763,40 @@ async def verificar_novo_membro(update: Update, context: ContextTypes.DEFAULT_TY
                 logger.warning(f"Usuário não autorizado detectado no canal: {user_id}")
                 await remover_usuario_nao_autorizado(user_id, context.bot)
 
+def keep_alive():
+    """Função para manter o serviço ativo no Render"""
+    # URL do próprio serviço
+    host_url = os.environ.get('RENDER_EXTERNAL_URL', 'http://localhost:8080')
+    
+    while True:
+        try:
+            # Faz uma requisição para o próprio serviço a cada 30 segundos
+            urllib.request.urlopen(host_url)
+            logger.info("Keep-alive ping enviado")
+        except Exception as e:
+            logger.error(f"Erro no keep-alive: {e}")
+        
+        # Aguarda 30 segundos antes do próximo ping
+        time.sleep(30)
+
+class KeepAliveHandler(http.server.SimpleHTTPRequestHandler):
+    """Handler para o servidor HTTP de keep-alive"""
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b'Bot is running!')
+        return
+
+def start_keep_alive_server():
+    """Inicia o servidor HTTP para keep-alive"""
+    port = int(os.environ.get('PORT', 8080))
+    handler = KeepAliveHandler
+    
+    with socketserver.TCPServer(("", port), handler) as httpd:
+        logger.info(f"Servidor keep-alive iniciado na porta {port}")
+        httpd.serve_forever()
+
 def main():
     """Função principal do bot"""
     # Inicializa o banco de dados
@@ -795,6 +832,14 @@ def main():
     # Inicia thread de verificação automática
     thread_verificacao = threading.Thread(target=verificacao_automatica, daemon=True)
     thread_verificacao.start()
+    
+    # Inicia o servidor HTTP para keep-alive
+    server_thread = threading.Thread(target=start_keep_alive_server, daemon=True)
+    server_thread.start()
+    
+    # Inicia thread de keep-alive para fazer auto-ping
+    keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
+    keep_alive_thread.start()
     
     # Inicia o bot
     logger.info("Bot iniciado! Pressione Ctrl+C para parar.")
