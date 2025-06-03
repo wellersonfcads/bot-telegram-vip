@@ -25,6 +25,7 @@ BOT_TOKEN = "7963030995:AAE8K5RIFJpaOhxLnDxJ4k614wnq4n549AQ"
 
 # Links PIX (seus códigos originais)
 LINKS_PIX = {
+    "10_minutos": "00020101021126580014br.gov.bcb.pix01369cf720a7-fa96-4b33-8a37-76a401089d5f520400005303986540539.905802BR5919AZ FULL ADMINISTRAC6008BRASILIA6207050363044086",
     "1_mes": "00020101021126580014br.gov.bcb.pix01369cf720a7-fa96-4b33-8a37-76a401089d5f520400005303986540539.905802BR5919AZ FULL ADMINISTRAC6008BRASILIA6207050363044086",
     "3_meses": "00020101021126580014br.gov.bcb.pix01369cf720a7-fa96-4b33-8a37-76a401089d5f520400005303986540599.905802BR5919AZ FULL ADMINISTRAC6008BRASILIA6207050363041E24",
     "6_meses": "00020101021126580014br.gov.bcb.pix01369cf720a7-fa96-4b33-8a37-76a401089d5f5204000053039865406179.905802BR5919AZ FULL ADMINISTRAC6008BRASILIA6207050363043084",
@@ -33,6 +34,7 @@ LINKS_PIX = {
 
 # Planos e valores
 PLANOS = {
+    "10_minutos": {"nome": "Plano VIP 10 minutos", "valor": "R$ 39,90", "dias": 0.007},
     "1_mes": {"nome": "Plano VIP 1 mês", "valor": "R$ 39,90", "dias": 30},
     "3_meses": {"nome": "Plano VIP 3 meses", "valor": "R$ 99,90", "dias": 90},
     "6_meses": {"nome": "Plano VIP 6 meses", "valor": "R$ 179,90", "dias": 180},
@@ -180,6 +182,7 @@ async def mostrar_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     keyboard = [
+        [InlineKeyboardButton(f"⚡ {PLANOS['10_minutos']['nome']} - {PLANOS['10_minutos']['valor']}", callback_data="plano_10_minutos")],
         [InlineKeyboardButton(f"💎 {PLANOS['1_mes']['nome']} - {PLANOS['1_mes']['valor']}", callback_data="plano_1_mes")],
         [InlineKeyboardButton(f"💎 {PLANOS['3_meses']['nome']} - {PLANOS['3_meses']['valor']}", callback_data="plano_3_meses")],
         [InlineKeyboardButton(f"💎 {PLANOS['6_meses']['nome']} - {PLANOS['6_meses']['valor']}", callback_data="plano_6_meses")],
@@ -190,6 +193,7 @@ async def mostrar_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         "💎 *PLANOS VIP DISPONÍVEIS*\n\n"
         "Escolha o plano que mais combina com você:\n\n"
+        "⚡ Plano de 10 minutos para experimentar o conteúdo!\n"
         "✨ Todos os planos incluem acesso completo ao conteúdo exclusivo!\n"
         "🔥 Quanto maior o plano, melhor o custo-benefício!\n\n"
         "Clique no plano desejado:",
@@ -440,8 +444,15 @@ async def processar_aprovacao(update: Update, context: ContextTypes.DEFAULT_TYPE
                 expire_date=int(time.time()) + 3600  # Expira em 1 hora
             )
             
+            # Calcula a data de expiração com base no plano
+            if plano_key == "10_minutos":
+                # Para o plano de 10 minutos, calculamos exatamente 10 minutos
+                data_expiracao = datetime.now() + timedelta(minutes=10)
+            else:
+                # Para os outros planos, usamos o número de dias
+                data_expiracao = datetime.now() + timedelta(days=plano['dias'])
+            
             # Adiciona ao banco de dados
-            data_expiracao = datetime.now() + timedelta(days=plano['dias'])
             conn = sqlite3.connect('vip_bot.db')
             cursor = conn.cursor()
             cursor.execute('''
@@ -460,13 +471,19 @@ async def processar_aprovacao(update: Update, context: ContextTypes.DEFAULT_TYPE
             conn.commit()
             conn.close()
             
+            # Mensagem personalizada com base no plano
+            if plano_key == "10_minutos":
+                mensagem_expiracao = f"⏰ Válido por apenas 10 minutos! Expira às: {data_expiracao.strftime('%H:%M:%S')}"
+            else:
+                mensagem_expiracao = f"⏰ Válido até: {data_expiracao.strftime('%d/%m/%Y')}"
+            
             # Envia link para o usuário
             await context.bot.send_message(
                 chat_id=user_id,
                 text=f"🎉 *PAGAMENTO APROVADO!*\n\n"
                      f"Seja bem-vinda ao meu VIP, amor! 💕\n\n"
                      f"💎 Plano: {plano['nome']}\n"
-                     f"⏰ Válido até: {data_expiracao.strftime('%d/%m/%Y')}\n\n"
+                     f"{mensagem_expiracao}\n\n"
                      f"🔗 *Link de acesso:*\n{link_convite.invite_link}\n\n"
                      f"⚠️ *Atenção:*\n"
                      f"- Este link expira em 1 hora e só pode ser usado uma vez.\n"
@@ -484,7 +501,7 @@ async def processar_aprovacao(update: Update, context: ContextTypes.DEFAULT_TYPE
                        f"💎 Plano: {plano['nome']}\n"
                        f"💰 Valor: {plano['valor']}\n"
                        f"⏰ Aprovado em: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n"
-                       f"📅 Expira em: {data_expiracao.strftime('%d/%m/%Y')}",
+                       f"📅 Expira em: {data_expiracao.strftime('%d/%m/%Y %H:%M')}",
                 parse_mode='Markdown'
             )
             
@@ -509,17 +526,18 @@ async def processar_aprovacao(update: Update, context: ContextTypes.DEFAULT_TYPE
         await context.bot.send_message(
             chat_id=user_id,
             text="❌ *Pagamento não aprovado*\n\n"
-                 "Infelizmente não consegui confirmar seu pagamento.\n\n"
-                 "💬 Entre em contato comigo para resolver esta questão.\n"
-                 "🔄 Ou tente fazer um novo pagamento.",
+                 "Infelizmente não consegui confirmar seu pagamento.\n"
+                 "Por favor, verifique se o comprovante está correto e tente novamente.\n\n"
+                 "Se precisar de ajuda, use o comando /start para recomeçar.",
             parse_mode='Markdown'
         )
         
         # Confirma para você
         await query.edit_message_caption(
-            caption=f"❌ *ACESSO REJEITADO*\n\n"
+            caption=f"❌ *PAGAMENTO REJEITADO*\n\n"
                    f"👤 Usuário: ID {user_id}\n"
                    f"💎 Plano: {plano['nome']}\n"
+                   f"💰 Valor: {plano['valor']}\n"
                    f"⏰ Rejeitado em: {datetime.now().strftime('%d/%m/%Y %H:%M')}",
             parse_mode='Markdown'
         )
@@ -596,13 +614,21 @@ def remover_usuarios_expirados():
 
 def verificacao_automatica():
     """Thread para verificação automática de usuários expirados"""
+    logger.info("Iniciando verificação automática de usuários expirados")
+    
+    # Aguarda 30 segundos antes de iniciar para garantir que o bot esteja pronto
+    time.sleep(30)
+    
     while True:
         try:
+            # Verifica usuários expirados
             remover_usuarios_expirados()
-            time.sleep(3600)  # Verifica a cada hora
+            
+            # Verifica a cada 1 minuto para garantir que os planos de 10 minutos sejam tratados corretamente
+            time.sleep(60)  # Verifica a cada minuto
         except Exception as e:
             logger.error(f"Erro na verificação automática: {e}")
-            time.sleep(300)  # Aguarda 5 minutos em caso de erro
+            time.sleep(60)  # Aguarda 1 minuto em caso de erro
 
 async def remover_usuario(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Remove um usuário específico do canal VIP"""
