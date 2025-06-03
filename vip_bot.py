@@ -1,4 +1,3 @@
-
 import logging
 from datetime import datetime, timedelta
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -35,19 +34,15 @@ async def handle_plan_selection(update: Update, context: ContextTypes.DEFAULT_TY
     plan = plans[plan_key]
     context.user_data["selected_plan"] = plan
     await query.message.reply_text(
-        f"💳 Plano escolhido: {plan['label']}
-"
-        f"Valor: {plan['price']}
+        f"""💳 Plano escolhido: {plan['label']}
+Valor: {plan['price']}
 
-"
-        f"Copie o código Pix abaixo para pagamento:
+Copie o código Pix abaixo para pagamento:
 
-"
-        f"🔢 Código Pix:
+🔢 Código Pix:
 {plan['pix']}
 
-"
-        f"Após o pagamento, clique no botão abaixo para confirmar.",
+Após o pagamento, clique no botão abaixo para confirmar.""",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Já paguei", callback_data="confirm_payment")]
         ])
@@ -58,14 +53,11 @@ async def handle_payment_confirmation(update: Update, context: ContextTypes.DEFA
     await query.answer()
     plan = context.user_data.get("selected_plan")
     await query.message.reply_text(
-        "🔍 Aguarde! Seu pagamento será verificado manualmente.
-"
-        "Assim que for aprovado, você receberá acesso ao canal VIP.
+        f"""🔍 Aguarde! Seu pagamento será verificado manualmente.
+Assim que for aprovado, você receberá acesso ao canal VIP.
 
-"
-        "✅ Após verificar, o admin adicionará você no canal:"
-        f"
-{VIP_CHANNEL_LINK}"
+✅ Após verificar, o admin adicionará você no canal:
+{VIP_CHANNEL_LINK}"""
     )
 
 if __name__ == "__main__":
