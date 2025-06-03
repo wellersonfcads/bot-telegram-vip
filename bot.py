@@ -543,6 +543,10 @@ async def listar_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
         texto += f"📅 Expira em: {data_exp.strftime('%d/%m/%Y')}\n"
         texto += f"⏰ Dias restantes: {dias_restantes}\n\n"
     
+    # Adiciona instruções para remover usuários
+    texto += "\n💡 *Para remover um usuário, use:*\n"
+    texto += "/remover ID_DO_USUARIO"
+    
     await update.message.reply_text(texto, parse_mode='Markdown')
 
 def remover_usuarios_expirados():
@@ -592,6 +596,89 @@ def verificacao_automatica():
             logger.error(f"Erro na verificação automática: {e}")
             time.sleep(300)  # Aguarda 5 minutos em caso de erro
 
+async def remover_usuario(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Remove um usuário específico do canal VIP"""
+    # Verifica se é o administrador
+    if update.effective_user.id != SEU_USER_ID:
+        return
+    
+    # Verifica se o ID do usuário foi fornecido
+    if not context.args:
+        await update.message.reply_text(
+            "❌ *Erro: ID do usuário não fornecido*\n\n"
+            "Use o comando assim: /remover ID_DO_USUARIO",
+            parse_mode='Markdown'
+        )
+        return
+    
+    try:
+        # Obtém o ID do usuário a ser removido
+        user_id = int(context.args[0])
+        
+        # Verifica se o usuário existe no banco de dados
+        conn = sqlite3.connect('vip_bot.db')
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM usuarios_vip WHERE user_id = ? AND ativo = 1', (user_id,))
+        usuario = cursor.fetchone()
+        
+        if not usuario:
+            await update.message.reply_text(
+                f"❌ *Erro: Usuário {user_id} não encontrado ou já está inativo*",
+                parse_mode='Markdown'
+            )
+            conn.close()
+            return
+        
+        # Remove o usuário do canal VIP
+        try:
+            # Bane e depois desbane para remover do canal
+            await context.bot.ban_chat_member(CANAL_VIP_ID, user_id)
+            await context.bot.unban_chat_member(CANAL_VIP_ID, user_id)
+            
+            # Atualiza o status no banco de dados
+            cursor.execute('UPDATE usuarios_vip SET ativo = 0 WHERE user_id = ?', (user_id,))
+            conn.commit()
+            
+            # Notifica o usuário sobre a remoção
+            try:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text="⚠️ *Seu acesso ao canal VIP foi revogado*\n\n"
+                         "Seu acesso ao conteúdo VIP foi encerrado pelo administrador.\n\n"
+                         "Para mais informações, entre em contato com o suporte.",
+                    parse_mode='Markdown'
+                )
+            except Exception as e:
+                logger.error(f"Erro ao notificar usuário {user_id}: {e}")
+            
+            # Confirma a remoção para o administrador
+            await update.message.reply_text(
+                f"✅ *Usuário {user_id} removido com sucesso!*\n\n"
+                f"O usuário foi removido do canal VIP e seu status foi atualizado no banco de dados.",
+                parse_mode='Markdown'
+            )
+            
+        except Exception as e:
+            await update.message.reply_text(
+                f"⚠️ *Erro ao remover usuário do canal:* {e}\n\n"
+                f"Verifique se o bot é administrador do canal com permissões para remover membros.",
+                parse_mode='Markdown'
+            )
+        
+        conn.close()
+        
+    except ValueError:
+        await update.message.reply_text(
+            "❌ *Erro: ID do usuário inválido*\n\n"
+            "O ID do usuário deve ser um número inteiro.",
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ *Erro ao processar o comando:* {e}",
+            parse_mode='Markdown'
+        )
+
 def main():
     """Função principal do bot"""
     # Inicializa o banco de dados
@@ -603,6 +690,7 @@ def main():
     # Handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("usuarios", listar_usuarios))
+    application.add_handler(CommandHandler("remover", remover_usuario))
     
     # Callback handlers
     application.add_handler(CallbackQueryHandler(handle_idade, pattern="^idade_"))
