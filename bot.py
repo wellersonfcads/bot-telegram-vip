@@ -382,10 +382,21 @@ async def delete_webhook_and_start():
     except Exception as e:
         logger.warning(f"Erro ao deletar webhook: {e}")
 
-def main():
+async def main():
     """Função principal"""
+    # Deletar webhook primeiro
+    await delete_webhook_and_start()
+    
     # Criar aplicação
-    application = Application.builder().token(BOT_TOKEN).build()
+    application = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .get_updates_read_timeout(30)
+        .get_updates_write_timeout(30)
+        .get_updates_connect_timeout(30)
+        .get_updates_pool_timeout(30)
+        .build()
+    )
     
     # Adicionar handlers
     application.add_handler(CommandHandler("start", start))
@@ -394,33 +405,17 @@ def main():
     application.add_handler(CallbackQueryHandler(payment_done, pattern="^payment_done_"))
     application.add_handler(CallbackQueryHandler(back_to_plans, pattern="^back_to_plans"))
     
-    # Iniciar tarefas em background
-    async def startup():
-        # Deletar webhook
-        await delete_webhook_and_start()
-        
-        # Iniciar servidor web
-        await start_web_server()
-        
-        # Iniciar verificador de assinaturas em thread separada
-        subscription_thread = threading.Thread(target=run_subscription_checker, daemon=True)
-        subscription_thread.start()
-        
-        logger.info("Bot iniciado com sucesso!")
+    # Iniciar servidor web
+    await start_web_server()
     
-    # Executar inicialização
-    asyncio.run(startup())
+    # Iniciar verificador de assinaturas em thread separada
+    subscription_thread = threading.Thread(target=run_subscription_checker, daemon=True)
+    subscription_thread.start()
+    
+    logger.info("Bot iniciado com sucesso!")
     
     # Iniciar bot com polling
-    application.run_polling(
-        poll_interval=2,
-        timeout=20,
-        bootstrap_retries=5,
-        read_timeout=30,
-        write_timeout=30,
-        connect_timeout=30,
-        pool_timeout=30
-    )
+    await application.run_polling(poll_interval=2, bootstrap_retries=5)
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())
