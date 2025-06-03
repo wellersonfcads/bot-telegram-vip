@@ -1,2 +1,1 @@
-pyTelegramBotAPI
-python-dotenv
+python-telegram-bot==20.3
