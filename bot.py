@@ -1,550 +1,388 @@
-import os
 import logging
-import datetime
+import sqlite3
 import asyncio
-import json
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import threading
-from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from datetime import datetime, timedelta
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-from telegram.error import TelegramError
-from dotenv import load_dotenv
+import schedule
+import time
+from threading import Thread
 
-# Carregar variáveis de ambiente do arquivo .env
-load_dotenv()
-
-# Configuração de logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+# Configuração do logging
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Configurações do bot a partir de variáveis de ambiente
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CANAL_VIP_ID = int(os.getenv("CANAL_VIP_ID"))
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
+# Configurações do bot
+TOKEN = "7963030995:AAE8K5RIFJpaOhxLnDxJ4k614wnq4n549AQ"
+CANAL_VIP_LINK = "https://t.me/+9TBR6fK429tiMmRh"
+CANAL_VIP_ID = "-1002280243232"  # ID do seu canal VIP
 
-# Verificar se as variáveis de ambiente foram carregadas corretamente
-if not all([TOKEN, CANAL_VIP_ID, ADMIN_ID]):
-    logger.error("Erro: Variáveis de ambiente não configuradas corretamente.")
-    logger.error("Certifique-se de criar um arquivo .env com as configurações necessárias.")
-    logger.error("Você pode usar o arquivo .env.example como modelo.")
-    exit(1)
-
-# Informações dos planos
+# Dados dos planos
 PLANOS = {
-    "1_mes": {
+    "1mes": {
         "nome": "Plano VIP 1 mês",
         "valor": "R$ 39,90",
-        "duracao_dias": 30,
+        "duracao": 30,
         "pix": "00020101021126580014br.gov.bcb.pix01369cf720a7-fa96-4b33-8a37-76a401089d5f520400005303986540539.905802BR5919AZ FULL ADMINISTRAC6008BRASILIA62070503***63044086"
     },
-    "3_meses": {
+    "3meses": {
         "nome": "Plano VIP 3 meses",
         "valor": "R$ 99,90",
-        "duracao_dias": 90,
+        "duracao": 90,
         "pix": "00020101021126580014br.gov.bcb.pix01369cf720a7-fa96-4b33-8a37-76a401089d5f520400005303986540599.905802BR5919AZ FULL ADMINISTRAC6008BRASILIA62070503***63041E24"
     },
-    "6_meses": {
+    "6meses": {
         "nome": "Plano VIP 6 meses",
         "valor": "R$ 179,90",
-        "duracao_dias": 180,
+        "duracao": 180,
         "pix": "00020101021126580014br.gov.bcb.pix01369cf720a7-fa96-4b33-8a37-76a401089d5f5204000053039865406179.905802BR5919AZ FULL ADMINISTRAC6008BRASILIA62070503***63043084"
     },
-    "12_meses": {
+    "12meses": {
         "nome": "Plano VIP 12 meses",
         "valor": "R$ 289,90",
-        "duracao_dias": 365,
+        "duracao": 365,
         "pix": "00020101021126580014br.gov.bcb.pix01369cf720a7-fa96-4b33-8a37-76a401089d5f5204000053039865406289.905802BR5919AZ FULL ADMINISTRAC6008BRASILIA62070503***6304CD13"
     }
 }
 
-# Arquivo para armazenar os usuários e suas assinaturas
-USUARIOS_DB = "usuarios.json"
+# Inicialização do banco de dados
+def init_db():
+    conn = sqlite3.connect('usuarios_vip.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS usuarios (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            plano TEXT,
+            data_entrada TEXT,
+            data_expiracao TEXT,
+            ativo INTEGER DEFAULT 1
+        )
+    ''')
+    conn.commit()
+    conn.close()
 
-# Função para carregar os dados dos usuários
-def carregar_usuarios():
-    if os.path.exists(USUARIOS_DB):
-        with open(USUARIOS_DB, 'r') as file:
-            try:
-                return json.load(file)
-            except json.JSONDecodeError:
-                logger.error("Erro ao decodificar o arquivo de usuários")
-                return {}
-    return {}
+# Funções do banco de dados
+def adicionar_usuario(user_id, username, plano):
+    conn = sqlite3.connect('usuarios_vip.db')
+    cursor = conn.cursor()
+    
+    data_entrada = datetime.now()
+    data_expiracao = data_entrada + timedelta(days=PLANOS[plano]["duracao"])
+    
+    cursor.execute('''
+        INSERT OR REPLACE INTO usuarios (user_id, username, plano, data_entrada, data_expiracao, ativo)
+        VALUES (?, ?, ?, ?, ?, 1)
+    ''', (user_id, username, plano, data_entrada.isoformat(), data_expiracao.isoformat()))
+    
+    conn.commit()
+    conn.close()
+    return data_expiracao
 
-# Função para salvar os dados dos usuários
-def salvar_usuarios(usuarios):
-    with open(USUARIOS_DB, 'w') as file:
-        json.dump(usuarios, file, indent=4)
+def verificar_usuarios_expirados():
+    conn = sqlite3.connect('usuarios_vip.db')
+    cursor = conn.cursor()
+    
+    agora = datetime.now().isoformat()
+    cursor.execute('''
+        SELECT user_id, username, plano FROM usuarios 
+        WHERE data_expiracao < ? AND ativo = 1
+    ''', (agora,))
+    
+    usuarios_expirados = cursor.fetchall()
+    
+    # Marcar como inativos
+    cursor.execute('''
+        UPDATE usuarios SET ativo = 0 
+        WHERE data_expiracao < ? AND ativo = 1
+    ''', (agora,))
+    
+    conn.commit()
+    conn.close()
+    
+    return usuarios_expirados
+
+def listar_usuarios_ativos():
+    conn = sqlite3.connect('usuarios_vip.db')
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT user_id, username, plano, data_entrada, data_expiracao 
+        FROM usuarios WHERE ativo = 1
+        ORDER BY data_expiracao
+    ''')
+    
+    usuarios = cursor.fetchall()
+    conn.close()
+    return usuarios
 
 # Comando /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("🔥 Plano VIP 1 mês - R$ 39,90", callback_data="plano_1_mes")],
-        [InlineKeyboardButton("🔥 Plano VIP 3 meses - R$ 99,90", callback_data="plano_3_meses")],
-        [InlineKeyboardButton("🔥 Plano VIP 6 meses - R$ 179,90", callback_data="plano_6_meses")],
-        [InlineKeyboardButton("🔥 Plano VIP 12 meses - R$ 289,90", callback_data="plano_12_meses")]
+        [InlineKeyboardButton("💎 Ver Planos VIP", callback_data="ver_planos")],
+        [InlineKeyboardButton("📞 Suporte", url="https://t.me/seusupporte")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        "🔞 *BEM-VINDO AO CONTEÚDO VIP* 🔞\n\n"
-        "Escolha um plano para ter acesso ao conteúdo exclusivo:\n",
+        "🔥 *Bem-vindo ao VIP da Clarinha!* 🔥\n\n"
+        "Aqui você tem acesso ao conteúdo mais exclusivo! 💋\n\n"
+        "Escolha seu plano e tenha acesso completo:",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
 
-# Função para processar a escolha do plano
-async def processar_plano(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+# Mostrar planos disponíveis
+async def ver_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = []
     
-    plano_id = query.data.replace("plano_", "")
-    plano = PLANOS.get(plano_id)
+    for plano_id, dados in PLANOS.items():
+        texto_botao = f"{dados['nome']} - {dados['valor']}"
+        keyboard.append([InlineKeyboardButton(texto_botao, callback_data=f"plano_{plano_id}")])
     
-    if not plano:
-        await query.edit_message_text(text="Plano não encontrado. Por favor, tente novamente.")
-        return
+    keyboard.append([InlineKeyboardButton("⬅️ Voltar", callback_data="voltar_inicio")])
     
-    # Botão para gerar o PIX
-    keyboard = [
-        [InlineKeyboardButton("💰 Gerar PIX", callback_data=f"pix_{plano_id}")],
-        [InlineKeyboardButton("🔙 Voltar", callback_data="voltar")]
-    ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await query.edit_message_text(
-        f"*{plano['nome']}*\n\n"
-        f"Valor: *{plano['valor']}*\n\n"
-        f"Duração: *{plano['duracao_dias']} dias*\n\n"
-        f"Clique em 'Gerar PIX' para realizar o pagamento.",
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
-    )
-
-# Função para gerar o PIX
-async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    plano_id = query.data.replace("pix_", "")
-    plano = PLANOS.get(plano_id)
-    
-    if not plano:
-        await query.edit_message_text(text="Plano não encontrado. Por favor, tente novamente.")
-        return
-    
-    # Botões para confirmar pagamento ou voltar
-    keyboard = [
-        [InlineKeyboardButton("✅ Confirmar Pagamento", callback_data=f"confirmar_{plano_id}")],
-        [InlineKeyboardButton("🔙 Voltar", callback_data=f"plano_{plano_id}")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(
-        f"*{plano['nome']}*\n\n"
-        f"Valor: *{plano['valor']}*\n\n"
-        f"*Copie o código PIX abaixo:*\n`{plano['pix']}`\n\n"
-        f"Após realizar o pagamento, clique em 'Confirmar Pagamento'.",
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
-    )
-
-# Função para confirmar o pagamento
-async def confirmar_pagamento(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    plano_id = query.data.replace("confirmar_", "")
-    plano = PLANOS.get(plano_id)
-    
-    if not plano:
-        await query.edit_message_text(text="Plano não encontrado. Por favor, tente novamente.")
-        return
-    
-    user_id = query.from_user.id
-    username = query.from_user.username or f"user_{user_id}"
-    
-    # Notificar o administrador sobre o pagamento
-    admin_message = (
-        f"🔔 *NOVA SOLICITAÇÃO DE ACESSO* 🔔\n\n"
-        f"Usuário: @{username} (ID: {user_id})\n"
-        f"Plano: {plano['nome']}\n"
-        f"Valor: {plano['valor']}\n\n"
-        f"Aguardando confirmação de pagamento."
+    texto = (
+        "💎 *PLANOS VIP DISPONÍVEIS* 💎\n\n"
+        "🔥 **Conteúdo 100% exclusivo**\n"
+        "📸 **Fotos e vídeos inéditos**\n"
+        "💬 **Interação direta**\n"
+        "🎁 **Surpresas semanais**\n\n"
+        "Escolha o plano ideal para você:"
     )
     
-    # Botões para o admin aprovar ou rejeitar
-    admin_keyboard = [
-        [InlineKeyboardButton("✅ Aprovar", callback_data=f"aprovar_{user_id}_{plano_id}")],
-        [InlineKeyboardButton("❌ Rejeitar", callback_data=f"rejeitar_{user_id}")]
-    ]
-    admin_reply_markup = InlineKeyboardMarkup(admin_keyboard)
-    
-    try:
-        await context.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=admin_message,
-            reply_markup=admin_reply_markup,
-            parse_mode='Markdown'
-        )
-        
-        # Informar ao usuário que o pagamento está sendo processado
-        await query.edit_message_text(
-            "✅ *Solicitação enviada com sucesso!*\n\n"
-            "Seu pagamento está sendo verificado pelo administrador.\n"
-            "Você receberá o link de acesso assim que o pagamento for confirmado.",
-            parse_mode='Markdown'
-        )
-    except TelegramError as e:
-        logger.error(f"Erro ao enviar mensagem para o administrador: {e}")
-        await query.edit_message_text(
-            "❌ Ocorreu um erro ao processar sua solicitação. Por favor, tente novamente mais tarde."
-        )
-
-# Função para o administrador aprovar o pagamento
-async def aprovar_pagamento(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
-    
-    # Extrair informações do callback_data
-    _, user_id, plano_id = query.data.split("_")
-    user_id = int(user_id)
-    plano = PLANOS.get(plano_id)
-    
-    if not plano:
-        await query.edit_message_text(text="Plano não encontrado.")
-        return
-    
-    # Gerar link de convite para o canal VIP
-    try:
-        invite_link = await context.bot.create_chat_invite_link(
-            chat_id=CANAL_VIP_ID,
-            expire_date=None,  # Link não expira
-            member_limit=1  # Limite de 1 uso
-        )
-        
-        # Calcular a data de expiração da assinatura
-        data_inicio = datetime.datetime.now()
-        data_expiracao = data_inicio + datetime.timedelta(days=plano["duracao_dias"])
-        
-        # Salvar informações do usuário
-        usuarios = carregar_usuarios()
-        usuarios[str(user_id)] = {
-            "plano": plano_id,
-            "data_inicio": data_inicio.isoformat(),
-            "data_expiracao": data_expiracao.isoformat(),
-            "invite_link": invite_link.invite_link
-        }
-        salvar_usuarios(usuarios)
-        
-        # Enviar link de convite para o usuário
-        await context.bot.send_message(
-            chat_id=user_id,
-            text=f"🎉 *Pagamento aprovado!* 🎉\n\n"
-                 f"Seu acesso ao *{plano['nome']}* foi liberado.\n\n"
-                 f"Clique no link abaixo para acessar o canal VIP:\n"
-                 f"{invite_link.invite_link}\n\n"
-                 f"Seu acesso expira em: {data_expiracao.strftime('%d/%m/%Y')}\n\n"
-                 f"Aproveite o conteúdo exclusivo! 🔞",
-            parse_mode='Markdown'
-        )
-        
-        # Atualizar mensagem do admin
-        await query.edit_message_text(
-            f"✅ Acesso aprovado para o usuário ID: {user_id}\n"
-            f"Plano: {plano['nome']}\n"
-            f"Expira em: {data_expiracao.strftime('%d/%m/%Y')}"
-        )
-        
-    except TelegramError as e:
-        logger.error(f"Erro ao criar link de convite: {e}")
-        await query.edit_message_text(f"❌ Erro ao criar link de convite: {e}")
+    await query.edit_message_text(texto, reply_markup=reply_markup, parse_mode='Markdown')
 
-# Função para o administrador rejeitar o pagamento
-async def rejeitar_pagamento(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    # Extrair ID do usuário do callback_data
-    _, user_id = query.data.split("_")
-    user_id = int(user_id)
-    
-    try:
-        # Informar ao usuário que o pagamento foi rejeitado
-        await context.bot.send_message(
-            chat_id=user_id,
-            text="❌ *Pagamento não confirmado* ❌\n\n"
-                 "Não foi possível confirmar seu pagamento.\n"
-                 "Por favor, verifique se o pagamento foi realizado corretamente e tente novamente.",
-            parse_mode='Markdown'
-        )
-        
-        # Atualizar mensagem do admin
-        await query.edit_message_text(f"❌ Pagamento rejeitado para o usuário ID: {user_id}")
-        
-    except TelegramError as e:
-        logger.error(f"Erro ao enviar mensagem de rejeição: {e}")
-        await query.edit_message_text(f"❌ Erro ao enviar mensagem de rejeição: {e}")
-
-# Função para voltar ao menu principal
-async def voltar_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+# Mostrar detalhes de um plano específico
+async def mostrar_plano(update: Update, context: ContextTypes.DEFAULT_TYPE, plano_id: str):
+    plano = PLANOS[plano_id]
     
     keyboard = [
-        [InlineKeyboardButton("🔥 Plano VIP 1 mês - R$ 39,90", callback_data="plano_1_mes")],
-        [InlineKeyboardButton("🔥 Plano VIP 3 meses - R$ 99,90", callback_data="plano_3_meses")],
-        [InlineKeyboardButton("🔥 Plano VIP 6 meses - R$ 179,90", callback_data="plano_6_meses")],
-        [InlineKeyboardButton("🔥 Plano VIP 12 meses - R$ 289,90", callback_data="plano_12_meses")]
+        [InlineKeyboardButton("💳 Gerar PIX", callback_data=f"gerar_pix_{plano_id}")],
+        [InlineKeyboardButton("⬅️ Voltar aos Planos", callback_data="ver_planos")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await query.edit_message_text(
-        "🔞 *BEM-VINDO AO CONTEÚDO VIP* 🔞\n\n"
-        "Escolha um plano para ter acesso ao conteúdo exclusivo:\n",
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
+    texto = (
+        f"💎 *{plano['nome']}*\n\n"
+        f"💰 **Valor:** {plano['valor']}\n"
+        f"⏰ **Duração:** {plano['duracao']} dias\n\n"
+        f"🔥 **O que você vai receber:**\n"
+        f"• Acesso completo ao canal VIP\n"
+        f"• Conteúdo exclusivo diário\n"
+        f"• Fotos e vídeos em alta qualidade\n"
+        f"• Interação direta comigo\n"
+        f"• Pedidos personalizados\n\n"
+        f"Clique em 'Gerar PIX' para finalizar sua compra!"
     )
+    
+    query = update.callback_query
+    await query.edit_message_text(texto, reply_markup=reply_markup, parse_mode='Markdown')
 
-# Comando para verificar assinaturas expiradas (apenas para o administrador)
-async def verificar_expiracoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+# Gerar PIX para pagamento
+async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE, plano_id: str):
+    plano = PLANOS[plano_id]
     
-    # Verificar se o comando foi enviado pelo administrador
-    if user_id != ADMIN_ID:
-        await update.message.reply_text("Você não tem permissão para usar este comando.")
-        return
-    
-    usuarios = carregar_usuarios()
-    agora = datetime.datetime.now()
-    expirados = []
-    
-    for user_id, info in usuarios.items():
-        data_expiracao = datetime.datetime.fromisoformat(info["data_expiracao"])
-        if agora > data_expiracao:
-            expirados.append((user_id, info))
-    
-    if not expirados:
-        await update.message.reply_text("Não há assinaturas expiradas no momento.")
-        return
-    
-    # Listar assinaturas expiradas
-    mensagem = "📊 *Assinaturas Expiradas* 📊\n\n"
-    
-    for user_id, info in expirados:
-        plano_id = info["plano"]
-        plano_nome = PLANOS.get(plano_id, {}).get("nome", "Plano desconhecido")
-        data_expiracao = datetime.datetime.fromisoformat(info["data_expiracao"])
-        
-        mensagem += f"Usuário ID: {user_id}\n"
-        mensagem += f"Plano: {plano_nome}\n"
-        mensagem += f"Expirou em: {data_expiracao.strftime('%d/%m/%Y')}\n\n"
-    
-    # Botão para remover todos os expirados
-    keyboard = [[InlineKeyboardButton("🗑️ Remover Todos Expirados", callback_data="remover_expirados")]]
+    keyboard = [
+        [InlineKeyboardButton("✅ Já Paguei - Solicitar Acesso", callback_data=f"solicitar_acesso_{plano_id}")],
+        [InlineKeyboardButton("⬅️ Voltar", callback_data=f"plano_{plano_id}")]
+    ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.message.reply_text(
-        mensagem,
+    # Aqui você pode gerar um QR Code se quiser
+    texto = (
+        f"💳 *PIX PARA PAGAMENTO*\n\n"
+        f"📋 **Plano:** {plano['nome']}\n"
+        f"💰 **Valor:** {plano['valor']}\n\n"
+        f"**Chave PIX (Copia e Cola):**\n"
+        f"`{plano['pix']}`\n\n"
+        f"⚠️ **IMPORTANTE:**\n"
+        f"• Após o pagamento, clique em 'Já Paguei'\n"
+        f"• Seu acesso será liberado em até 5 minutos\n"
+        f"• Guarde o comprovante de pagamento"
+    )
+    
+    query = update.callback_query
+    await query.edit_message_text(texto, reply_markup=reply_markup, parse_mode='Markdown')
+
+# Solicitar acesso após pagamento
+async def solicitar_acesso(update: Update, context: ContextTypes.DEFAULT_TYPE, plano_id: str):
+    query = update.callback_query
+    user = query.from_user
+    
+    # Adicionar usuário no banco de dados
+    data_expiracao = adicionar_usuario(user.id, user.username, plano_id)
+    
+    plano = PLANOS[plano_id]
+    
+    # Enviar link do canal VIP
+    keyboard = [
+        [InlineKeyboardButton("🔥 ENTRAR NO VIP", url=CANAL_VIP_LINK)],
+        [InlineKeyboardButton("📞 Suporte", url="https://t.me/seusupporte")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    texto = (
+        f"🎉 **PAGAMENTO CONFIRMADO!** 🎉\n\n"
+        f"✅ Seu {plano['nome']} foi ativado!\n"
+        f"📅 **Válido até:** {data_expiracao.strftime('%d/%m/%Y às %H:%M')}\n\n"
+        f"🔥 **Clique no botão abaixo para entrar no VIP:**\n\n"
+        f"⚠️ **IMPORTANTE:**\n"
+        f"• Salve este link: {CANAL_VIP_LINK}\n"
+        f"• Seu acesso expira automaticamente\n"
+        f"• Entre em contato com o suporte se tiver dúvidas"
+    )
+    
+    await query.edit_message_text(texto, reply_markup=reply_markup, parse_mode='Markdown')
+    
+    # Notificar administrador sobre nova venda
+    try:
+        await context.bot.send_message(
+            chat_id=SEU_USER_ID,  # Substitua pelo seu user ID
+            text=f"💰 NOVA VENDA!\n\n"
+                 f"👤 Usuário: @{user.username or 'Sem username'}\n"
+                 f"📋 Plano: {plano['nome']}\n"
+                 f"💰 Valor: {plano['valor']}\n"
+                 f"📅 Expira em: {data_expiracao.strftime('%d/%m/%Y')}"
+        )
+    except:
+        pass
+
+# Voltar ao início
+async def voltar_inicio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("💎 Ver Planos VIP", callback_data="ver_planos")],
+        [InlineKeyboardButton("📞 Suporte", url="https://t.me/seusupporte")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    query = update.callback_query
+    await query.edit_message_text(
+        "🔥 *Bem-vindo ao VIP da Clarinha!* 🔥\n\n"
+        "Aqui você tem acesso ao conteúdo mais exclusivo! 💋\n\n"
+        "Escolha seu plano e tenha acesso completo:",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
 
-# Função para remover todos os usuários expirados
-async def remover_expirados(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Handler para botões inline
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    # Verificar se o comando foi enviado pelo administrador
-    if query.from_user.id != ADMIN_ID:
-        await query.edit_message_text("Você não tem permissão para usar este comando.")
+    if query.data == "ver_planos":
+        await ver_planos(update, context)
+    elif query.data == "voltar_inicio":
+        await voltar_inicio(update, context)
+    elif query.data.startswith("plano_"):
+        plano_id = query.data.replace("plano_", "")
+        await mostrar_plano(update, context, plano_id)
+    elif query.data.startswith("gerar_pix_"):
+        plano_id = query.data.replace("gerar_pix_", "")
+        await gerar_pix(update, context, plano_id)
+    elif query.data.startswith("solicitar_acesso_"):
+        plano_id = query.data.replace("solicitar_acesso_", "")
+        await solicitar_acesso(update, context, plano_id)
+
+# Comandos administrativos
+async def admin_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Verificar se é admin (substitua pelo seu user ID)
+    if update.effective_user.id != SEU_USER_ID:
         return
     
-    usuarios = carregar_usuarios()
-    agora = datetime.datetime.now()
-    expirados = []
+    usuarios = listar_usuarios_ativos()
     
-    # Identificar usuários expirados
-    for user_id, info in list(usuarios.items()):
-        data_expiracao = datetime.datetime.fromisoformat(info["data_expiracao"])
-        if agora > data_expiracao:
-            expirados.append(int(user_id))
-            del usuarios[user_id]
+    if not usuarios:
+        await update.message.reply_text("📊 Nenhum usuário ativo no momento.")
+        return
     
-    # Salvar usuários atualizados
-    salvar_usuarios(usuarios)
+    texto = "📊 **USUÁRIOS ATIVOS:**\n\n"
     
-    # Remover usuários do canal VIP
-    bot = context.bot
-    removidos = 0
-    falhas = 0
+    for user_id, username, plano, entrada, expiracao in usuarios:
+        data_exp = datetime.fromisoformat(expiracao)
+        dias_restantes = (data_exp - datetime.now()).days
+        
+        texto += (
+            f"👤 @{username or 'Sem username'}\n"
+            f"📋 Plano: {PLANOS[plano]['nome']}\n"
+            f"⏰ Expira em: {dias_restantes} dias\n"
+            f"📅 Data: {data_exp.strftime('%d/%m/%Y')}\n\n"
+        )
     
-    for user_id in expirados:
+    await update.message.reply_text(texto, parse_mode='Markdown')
+
+# Função para remover usuários expirados
+async def remover_usuarios_expirados(context: ContextTypes.DEFAULT_TYPE):
+    usuarios_expirados = verificar_usuarios_expirados()
+    
+    if not usuarios_expirados:
+        return
+    
+    for user_id, username, plano in usuarios_expirados:
         try:
-            await bot.ban_chat_member(CANAL_VIP_ID, user_id)
-            await bot.unban_chat_member(CANAL_VIP_ID, user_id)  # Desbanir para permitir que entre novamente no futuro
-            removidos += 1
+            # Remover do canal VIP
+            await context.bot.ban_chat_member(CANAL_VIP_ID, user_id)
+            # Desbanir para que possa entrar novamente se comprar outro plano
+            await context.bot.unban_chat_member(CANAL_VIP_ID, user_id)
             
-            # Notificar o usuário sobre a expiração
-            try:
-                await bot.send_message(
-                    chat_id=user_id,
-                    text="⏰ *Sua assinatura expirou* ⏰\n\n"
-                         "Seu acesso ao conteúdo VIP foi encerrado porque sua assinatura expirou.\n\n"
-                         "Para renovar seu acesso, inicie uma nova conversa com o bot e escolha um plano.",
-                    parse_mode='Markdown'
-                )
-            except TelegramError:
-                # Ignorar erros ao enviar mensagem para o usuário
-                pass
+            # Notificar o usuário
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=f"⏰ Seu {PLANOS[plano]['nome']} expirou!\n\n"
+                     f"Para continuar tendo acesso ao conteúdo VIP, "
+                     f"escolha um novo plano:\n\n"
+                     f"/start"
+            )
             
-        except TelegramError as e:
-            logger.error(f"Erro ao remover usuário {user_id}: {e}")
-            falhas += 1
-    
-    # Atualizar mensagem com o resultado
-    await query.edit_message_text(
-        f"🗑️ *Remoção de usuários expirados* 🗑️\n\n"
-        f"Total de usuários expirados: {len(expirados)}\n"
-        f"Removidos com sucesso: {removidos}\n"
-        f"Falhas na remoção: {falhas}",
-        parse_mode='Markdown'
-    )
-
-# Função para verificar assinaturas automaticamente
-async def verificar_assinaturas_automaticamente(bot):
-    while True:
-        try:
-            usuarios = carregar_usuarios()
-            agora = datetime.datetime.now()
-            expirados = []
-            
-            # Identificar usuários expirados
-            for user_id, info in list(usuarios.items()):
-                data_expiracao = datetime.datetime.fromisoformat(info["data_expiracao"])
-                if agora > data_expiracao:
-                    expirados.append(int(user_id))
-                    del usuarios[user_id]
-            
-            # Salvar usuários atualizados
-            if expirados:
-                salvar_usuarios(usuarios)
-            
-                # Remover usuários do canal VIP
-                for user_id in expirados:
-                    try:
-                        await bot.ban_chat_member(CANAL_VIP_ID, user_id)
-                        await bot.unban_chat_member(CANAL_VIP_ID, user_id)  # Desbanir para permitir que entre novamente no futuro
-                        
-                        # Notificar o usuário sobre a expiração
-                        try:
-                            await bot.send_message(
-                                chat_id=user_id,
-                                text="⏰ *Sua assinatura expirou* ⏰\n\n"
-                                     "Seu acesso ao conteúdo VIP foi encerrado porque sua assinatura expirou.\n\n"
-                                     "Para renovar seu acesso, inicie uma nova conversa com o bot e escolha um plano.",
-                                parse_mode='Markdown'
-                            )
-                        except TelegramError:
-                            # Ignorar erros ao enviar mensagem para o usuário
-                            pass
-                        
-                    except TelegramError as e:
-                        logger.error(f"Erro ao remover usuário {user_id}: {e}")
-                
-                # Notificar o administrador
-                if expirados:
-                    try:
-                        await bot.send_message(
-                            chat_id=ADMIN_ID,
-                            text=f"🔔 *Notificação Automática* 🔔\n\n"
-                                 f"{len(expirados)} usuários com assinaturas expiradas foram removidos do canal VIP.",
-                            parse_mode='Markdown'
-                        )
-                    except TelegramError as e:
-                        logger.error(f"Erro ao notificar administrador: {e}")
+            logger.info(f"Usuário {username} ({user_id}) removido por expiração do plano {plano}")
             
         except Exception as e:
-            logger.error(f"Erro na verificação automática: {e}")
-        
-        # Verificar a cada 24 horas
-        await asyncio.sleep(86400)  # 24 horas em segundos
-
-# Função para iniciar o servidor web para o Render
-def start_web_server():
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.send_header('Content-type', 'text/plain')
-            self.end_headers()
-            self.wfile.write(b'Bot is running!')
-        
-        def log_message(self, format, *args):
-            # Desativar logs de requisições HTTP para reduzir ruído no console
-            pass
+            logger.error(f"Erro ao remover usuário {user_id}: {e}")
     
-    port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(('0.0.0.0', port), Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    print(f"Started web server on port {port}")
-    return server
+    # Notificar admin sobre remoções
+    if usuarios_expirados:
+        try:
+            await context.bot.send_message(
+                chat_id=SEU_USER_ID,
+                text=f"🔄 {len(usuarios_expirados)} usuários removidos por expiração de plano."
+            )
+        except:
+            pass
+
+# Configurar verificação automática
+def configurar_verificacao_automatica(application):
+    # Verificar a cada hora
+    job_queue = application.job_queue
+    if job_queue is not None:
+        job_queue.run_repeating(remover_usuarios_expirados, interval=3600, first=10)
+    else:
+        logger.warning("JobQueue não disponível. Verificação automática desabilitada.")
 
 # Função principal
-async def main():
-    # Iniciar servidor web para o Render
-    server = start_web_server()
+def main():
+    # Inicializar banco de dados
+    init_db()
     
-    # Criar a aplicação
+    # Criar aplicação
     application = Application.builder().token(TOKEN).build()
     
-    # Adicionar handlers
+    # Configurar handlers
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("verificar", verificar_expiracoes))
+    application.add_handler(CommandHandler("usuarios", admin_usuarios))
+    application.add_handler(CallbackQueryHandler(button_handler))
     
-    # Adicionar callback handlers
-    application.add_handler(CallbackQueryHandler(processar_plano, pattern=r"^plano_"))
-    application.add_handler(CallbackQueryHandler(gerar_pix, pattern=r"^pix_"))
-    application.add_handler(CallbackQueryHandler(confirmar_pagamento, pattern=r"^confirmar_"))
-    application.add_handler(CallbackQueryHandler(aprovar_pagamento, pattern=r"^aprovar_"))
-    application.add_handler(CallbackQueryHandler(rejeitar_pagamento, pattern=r"^rejeitar_"))
-    application.add_handler(CallbackQueryHandler(voltar_menu, pattern=r"^voltar$"))
-    application.add_handler(CallbackQueryHandler(remover_expirados, pattern=r"^remover_expirados$"))
+    # Configurar verificação automática
+    configurar_verificacao_automatica(application)
     
-    # Iniciar o bot
-    bot = Bot(TOKEN)
-    
-    # Iniciar a verificação automática de assinaturas em segundo plano
-    asyncio.create_task(verificar_assinaturas_automaticamente(bot))
-    
-    # Iniciar o polling com close_loop=False para evitar o erro "Cannot close a running event loop"
-    await application.run_polling(close_loop=False)
+    # Iniciar bot
+    logger.info("Bot iniciado!")
+    application.run_polling()
 
-if __name__ == "__main__":
-    # Usar o loop de eventos existente
-    try:
-        # No Render, o loop já está em execução, então usamos run() em vez de run_until_complete()
-        if os.environ.get("RENDER", False):
-            print("Executando no ambiente Render")
-            asyncio.run(main())
-        else:
-            # Em ambiente local, gerenciamos o loop manualmente
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(main())
-            loop.run_forever()
-    except KeyboardInterrupt:
-        print("Bot encerrado pelo usuário")
-    except RuntimeError as e:
-        if "already running" in str(e):
-            print("Loop já está em execução, provavelmente no ambiente Render")
-            # Criar um novo loop para o main
-            new_loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(new_loop)
-            new_loop.run_until_complete(main())
-        else:
-            print(f"Erro: {e}")
-    except Exception as e:
-        print(f"Erro não tratado: {e}")
+# Configurações que você precisa alterar:
+SEU_USER_ID = 6150001511  # Seu user ID do Telegram
+
+if __name__ == '__main__':
+    main()
