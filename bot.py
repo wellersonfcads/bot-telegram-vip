@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timedelta
 import telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ChatMemberHandler, filters, ContextTypes
 import os
 
 # Configuração de logging
@@ -14,6 +14,9 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# Desativa logs HTTP desnecessários
+logging.getLogger('httpx').setLevel(logging.WARNING)
 
 # Configurações - ALTERE AQUI
 SEU_USER_ID = 6150001511  # Seu user ID do Telegram
@@ -465,6 +468,10 @@ async def processar_aprovacao(update: Update, context: ContextTypes.DEFAULT_TYPE
                      f"💎 Plano: {plano['nome']}\n"
                      f"⏰ Válido até: {data_expiracao.strftime('%d/%m/%Y')}\n\n"
                      f"🔗 *Link de acesso:*\n{link_convite.invite_link}\n\n"
+                     f"⚠️ *Atenção:*\n"
+                     f"- Este link expira em 1 hora e só pode ser usado uma vez.\n"
+                     f"- Apenas você está autorizado a entrar no canal.\n"
+                     f"- Qualquer pessoa não autorizada que tentar entrar será removida automaticamente.\n\n"
                      f"✨ Aproveite todo o conteúdo exclusivo!\n"
                      f"💕 Qualquer dúvida, é só chamar!",
                 parse_mode='Markdown'
@@ -687,6 +694,72 @@ async def remover_usuario(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown'
         )
 
+async def verificar_usuario_autorizado(user_id):
+    """Verifica se um usuário está autorizado a acessar o canal VIP"""
+    conn = sqlite3.connect('vip_bot.db')
+    cursor = conn.cursor()
+    
+    # Verifica se o usuário existe e está ativo no banco de dados
+    cursor.execute('SELECT * FROM usuarios_vip WHERE user_id = ? AND ativo = 1', (user_id,))
+    usuario = cursor.fetchone()
+    
+    conn.close()
+    return usuario is not None
+
+async def remover_usuario_nao_autorizado(user_id, bot):
+    """Remove um usuário não autorizado do canal VIP"""
+    try:
+        # Bane e depois desbane para remover do canal
+        await bot.ban_chat_member(CANAL_VIP_ID, user_id)
+        await bot.unban_chat_member(CANAL_VIP_ID, user_id)
+        logger.info(f"Usuário não autorizado {user_id} removido do canal automaticamente")
+        
+        # Notifica o usuário sobre a remoção
+        try:
+            await bot.send_message(
+                chat_id=user_id,
+                text="⚠️ *Acesso não autorizado*\n\n"
+                     "Você foi removido do canal VIP porque seu acesso não foi autorizado.\n\n"
+                     "Para obter acesso, você precisa adquirir um plano VIP através do bot.\n"
+                     "Use o comando /start para iniciar o processo de compra.",
+                parse_mode='Markdown'
+            )
+        except Exception as e:
+            logger.error(f"Erro ao notificar usuário não autorizado {user_id}: {e}")
+        
+        # Notifica o administrador
+        await bot.send_message(
+            chat_id=SEU_USER_ID,
+            text=f"🚫 *Usuário não autorizado removido*\n\n"
+                 f"O usuário com ID {user_id} tentou acessar o canal VIP sem autorização e foi removido automaticamente.",
+            parse_mode='Markdown'
+        )
+        
+        return True
+    except Exception as e:
+        logger.error(f"Erro ao remover usuário não autorizado {user_id}: {e}")
+        return False
+
+async def verificar_novo_membro(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Verifica se um novo membro do canal está autorizado"""
+    # Verifica se é um evento de novo membro no canal VIP
+    if update.chat_member and str(update.chat_member.chat.id) == CANAL_VIP_ID:
+        if update.chat_member.new_chat_member.status in ["member", "restricted"]:
+            user_id = update.chat_member.new_chat_member.user.id
+            
+            # Ignora o administrador e o próprio bot
+            if user_id == SEU_USER_ID or user_id == context.bot.id:
+                return
+            
+            logger.info(f"Novo membro detectado no canal VIP: {user_id}")
+            
+            # Verifica se o usuário está autorizado
+            autorizado = await verificar_usuario_autorizado(user_id)
+            
+            if not autorizado:
+                logger.warning(f"Usuário não autorizado detectado no canal: {user_id}")
+                await remover_usuario_nao_autorizado(user_id, context.bot)
+
 def main():
     """Função principal do bot"""
     # Inicializa o banco de dados
@@ -716,6 +789,9 @@ def main():
         receber_comprovante
     ))
     
+    # Adiciona o handler para verificar novos membros no canal
+    application.add_handler(ChatMemberHandler(verificar_novo_membro, ChatMemberHandler.CHAT_MEMBER))
+    
     # Inicia thread de verificação automática
     thread_verificacao = threading.Thread(target=verificacao_automatica, daemon=True)
     thread_verificacao.start()
@@ -730,12 +806,18 @@ if __name__ == '__main__':
         # Cria e inicia a aplicação
         app = main()
         # Usa drop_pending_updates para evitar processamento de mensagens antigas
-        app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+        app.run_polling(
+            drop_pending_updates=True, 
+            allowed_updates=["message", "callback_query", "chat_member"]
+        )
     except telegram.error.Conflict:
         logger.error("Conflito detectado: outra instância do bot já está em execução.")
         logger.info("Tentando reiniciar com configurações diferentes...")
         # Tenta novamente com configurações diferentes
         app = main()
-        app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+        app.run_polling(
+            drop_pending_updates=True, 
+            allowed_updates=["message", "callback_query", "chat_member"]
+        )
     except Exception as e:
         logger.error(f"Erro ao iniciar o bot: {e}")
