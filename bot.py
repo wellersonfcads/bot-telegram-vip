@@ -481,16 +481,21 @@ def start_web_server():
             self.send_header('Content-type', 'text/plain')
             self.end_headers()
             self.wfile.write(b'Bot is running!')
+        
+        def log_message(self, format, *args):
+            # Desativar logs de requisições HTTP para reduzir ruído no console
+            pass
     
     port = int(os.environ.get("PORT", 8080))
     server = HTTPServer(('0.0.0.0', port), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     print(f"Started web server on port {port}")
+    return server
 
 # Função principal
 async def main():
     # Iniciar servidor web para o Render
-    start_web_server()
+    server = start_web_server()
     
     # Criar a aplicação
     application = Application.builder().token(TOKEN).build()
@@ -518,18 +523,28 @@ async def main():
     await application.run_polling(close_loop=False)
 
 if __name__ == "__main__":
-    # Configurar o loop de eventos
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
+    # Usar o loop de eventos existente
     try:
-        # Executar a função main assíncrona
-        loop.run_until_complete(main())
-        # Manter o loop rodando para o servidor web
-        loop.run_forever()
+        # No Render, o loop já está em execução, então usamos run() em vez de run_until_complete()
+        if os.environ.get("RENDER", False):
+            print("Executando no ambiente Render")
+            asyncio.run(main())
+        else:
+            # Em ambiente local, gerenciamos o loop manualmente
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(main())
+            loop.run_forever()
     except KeyboardInterrupt:
-        # Encerrar graciosamente quando Ctrl+C for pressionado
         print("Bot encerrado pelo usuário")
-    finally:
-        # Limpar recursos
-        loop.close()
+    except RuntimeError as e:
+        if "already running" in str(e):
+            print("Loop já está em execução, provavelmente no ambiente Render")
+            # Criar um novo loop para o main
+            new_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(new_loop)
+            new_loop.run_until_complete(main())
+        else:
+            print(f"Erro: {e}")
+    except Exception as e:
+        print(f"Erro não tratado: {e}")
