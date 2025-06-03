@@ -1,1 +1,0 @@
-web: python vip_bot.py
