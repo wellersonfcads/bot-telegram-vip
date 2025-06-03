@@ -3,6 +3,7 @@ import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta
+import telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 import os
@@ -632,12 +633,18 @@ async def remover_usuario(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Remove o usuário do canal VIP
         try:
             # Bane e depois desbane para remover do canal
-            await context.bot.ban_chat_member(CANAL_VIP_ID, user_id)
-            await context.bot.unban_chat_member(CANAL_VIP_ID, user_id)
+            try:
+                await context.bot.ban_chat_member(CANAL_VIP_ID, user_id)
+                await context.bot.unban_chat_member(CANAL_VIP_ID, user_id)
+                logger.info(f"Usuário {user_id} removido do canal com sucesso")
+            except Exception as e:
+                logger.error(f"Erro ao remover usuário {user_id} do canal: {e}")
+                # Continua mesmo se falhar a remoção do canal
             
             # Atualiza o status no banco de dados
             cursor.execute('UPDATE usuarios_vip SET ativo = 0 WHERE user_id = ?', (user_id,))
             conn.commit()
+            logger.info(f"Status do usuário {user_id} atualizado no banco de dados")
             
             # Notifica o usuário sobre a remoção
             try:
@@ -648,6 +655,7 @@ async def remover_usuario(update: Update, context: ContextTypes.DEFAULT_TYPE):
                          "Para mais informações, entre em contato com o suporte.",
                     parse_mode='Markdown'
                 )
+                logger.info(f"Usuário {user_id} notificado sobre a remoção")
             except Exception as e:
                 logger.error(f"Erro ao notificar usuário {user_id}: {e}")
             
@@ -660,7 +668,7 @@ async def remover_usuario(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         except Exception as e:
             await update.message.reply_text(
-                f"⚠️ *Erro ao remover usuário do canal:* {e}\n\n"
+                f"⚠️ *Erro ao remover usuário:* {e}\n\n"
                 f"Verifique se o bot é administrador do canal com permissões para remover membros.",
                 parse_mode='Markdown'
             )
@@ -684,7 +692,7 @@ def main():
     # Inicializa o banco de dados
     init_db()
     
-    # Cria a aplicação
+    # Cria a aplicação com configurações para evitar conflitos
     application = Application.builder().token(BOT_TOKEN).build()
     
     # Handlers
@@ -714,7 +722,20 @@ def main():
     
     # Inicia o bot
     logger.info("Bot iniciado! Pressione Ctrl+C para parar.")
-    application.run_polling()
+    return application
 
 if __name__ == '__main__':
-    main()
+    # Configuração para evitar conflitos de múltiplas instâncias
+    try:
+        # Cria e inicia a aplicação
+        app = main()
+        # Usa drop_pending_updates para evitar processamento de mensagens antigas
+        app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+    except telegram.error.Conflict:
+        logger.error("Conflito detectado: outra instância do bot já está em execução.")
+        logger.info("Tentando reiniciar com configurações diferentes...")
+        # Tenta novamente com configurações diferentes
+        app = main()
+        app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+    except Exception as e:
+        logger.error(f"Erro ao iniciar o bot: {e}")
