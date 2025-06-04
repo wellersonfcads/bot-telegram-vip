@@ -85,44 +85,10 @@ def init_db():
     conn.close()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /start com verificação de idade e verificação de VIP existente"""
+    """Comando /start com verificação de idade"""
     user_id = update.effective_user.id
     
-    # Verifica se o usuário já tem acesso VIP
-    conn = sqlite3.connect('vip_bot.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM usuarios_vip WHERE user_id = ? AND ativo = 1', (user_id,))
-    usuario_vip = cursor.fetchone()
-    conn.close()
-    
-    if usuario_vip:
-        # Usuário já tem acesso VIP
-        user_id, username, plano, data_entrada, data_expiracao, ativo = usuario_vip
-        plano_info = PLANOS[plano]
-        data_exp = datetime.fromisoformat(data_expiracao)
-        dias_restantes = (data_exp - datetime.now()).days
-        
-        # Cria teclado com opção para continuar o funil mesmo tendo VIP
-        keyboard = [
-            [InlineKeyboardButton("✨ Continuar mesmo assim", callback_data="idade_ok")],
-            [InlineKeyboardButton("💎 Ver meu plano atual", callback_data="ver_planos")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(
-            f"💎 *VOCÊ JÁ TEM ACESSO VIP!* 💎\n\n"
-            f"Oi amor! Você já tem acesso ao meu conteúdo VIP!\n\n"
-            f"📊 *Detalhes do seu plano:*\n"
-            f"• Plano: {plano_info['nome']}\n"
-            f"• Expira em: {data_exp.strftime('%d/%m/%Y')}\n"
-            f"• Dias restantes: {dias_restantes}\n\n"
-            f"Você pode continuar o funil para renovar seu plano ou ver as opções disponíveis.",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-        return
-    
-    # Verificação de idade para novos usuários
+    # Verificação de idade
     keyboard = [
         [InlineKeyboardButton("✅ Sim, tenho 18 anos ou mais", callback_data="idade_ok")],
         [InlineKeyboardButton("❌ Não tenho 18 anos", callback_data="idade_nao")]
@@ -651,73 +617,6 @@ def remover_usuarios_expirados():
     conn.commit()
     conn.close()
 
-async def notificar_usuarios_proximos_vencimento(bot):
-    """Notifica usuários com planos próximos do vencimento"""
-    conn = sqlite3.connect('vip_bot.db')
-    cursor = conn.cursor()
-    
-    # Data atual
-    data_atual = datetime.now()
-    
-    # Busca usuários com planos que vencem em 7, 3 e 1 dias
-    cursor.execute('''
-        SELECT user_id, username, plano, data_expiracao 
-        FROM usuarios_vip 
-        WHERE ativo = 1
-    ''')
-    
-    usuarios = cursor.fetchall()
-    
-    for usuario in usuarios:
-        user_id, username, plano, data_expiracao = usuario
-        data_exp = datetime.fromisoformat(data_expiracao)
-        dias_restantes = (data_exp - data_atual).days
-        
-        # Notifica usuários com 7, 3 ou 1 dia(s) restante(s)
-        if dias_restantes in [7, 3, 1]:
-            try:
-                plano_info = PLANOS[plano]
-                
-                # Mensagem personalizada baseada nos dias restantes
-                if dias_restantes == 7:
-                    mensagem = (
-                        f"⏰ *AVISO DE RENOVAÇÃO* ⏰\n\n"
-                        f"Oi amor! Seu plano VIP ({plano_info['nome']}) vai expirar em 7 dias.\n\n"
-                        f"📅 Data de vencimento: {data_exp.strftime('%d/%m/%Y')}\n\n"
-                        f"Para continuar tendo acesso ao meu conteúdo exclusivo, use o comando /start para renovar seu plano!\n\n"
-                        f"💋 Não quero ficar sem você no meu VIP!"
-                    )
-                elif dias_restantes == 3:
-                    mensagem = (
-                        f"⚠️ *ATENÇÃO: SEU PLANO ESTÁ ACABANDO* ⚠️\n\n"
-                        f"Oi amor! Faltam apenas 3 dias para seu plano VIP ({plano_info['nome']}) expirar.\n\n"
-                        f"📅 Data de vencimento: {data_exp.strftime('%d/%m/%Y')}\n\n"
-                        f"Renove agora mesmo usando o comando /start para não perder acesso ao meu conteúdo exclusivo!\n\n"
-                        f"💕 Quero você sempre comigo!"
-                    )
-                else:  # 1 dia
-                    mensagem = (
-                        f"🚨 *ÚLTIMO DIA DE ACESSO* 🚨\n\n"
-                        f"Oi amor! Seu plano VIP ({plano_info['nome']}) expira AMANHÃ!\n\n"
-                        f"📅 Data de vencimento: {data_exp.strftime('%d/%m/%Y')}\n\n"
-                        f"Essa é sua última chance de renovar! Use o comando /start agora mesmo para não perder acesso.\n\n"
-                        f"❤️ Não quero te perder!"
-                    )
-                
-                # Envia a notificação
-                await bot.send_message(
-                    chat_id=user_id,
-                    text=mensagem,
-                    parse_mode='Markdown'
-                )
-                
-                logger.info(f"Notificação de renovação enviada para usuário {user_id} (dias restantes: {dias_restantes})")
-                
-            except Exception as e:
-                logger.error(f"Erro ao notificar usuário {user_id} sobre vencimento: {e}")
-    
-    conn.close()
-
 def verificacao_automatica():
     """Thread para verificação automática de usuários expirados"""
     while True:
@@ -727,17 +626,6 @@ def verificacao_automatica():
         except Exception as e:
             logger.error(f"Erro na verificação automática: {e}")
             time.sleep(300)  # Aguarda 5 minutos em caso de erro
-
-async def verificar_notificacoes_vencimento(app):
-    """Verifica e notifica usuários com planos próximos do vencimento"""
-    while True:
-        try:
-            await notificar_usuarios_proximos_vencimento(app.bot)
-            # Verifica uma vez por dia
-            await asyncio.sleep(86400)  # 24 horas
-        except Exception as e:
-            logger.error(f"Erro na verificação de notificações de vencimento: {e}")
-            await asyncio.sleep(3600)  # Aguarda 1 hora em caso de erro
 
 async def remover_usuario(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Remove um usuário específico do canal VIP"""
@@ -973,52 +861,28 @@ def main():
     keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
     keep_alive_thread.start()
     
-    # A tarefa de verificação de notificações de vencimento será iniciada após o bot estar em execução
-    # Não podemos usar asyncio.create_task() aqui porque não estamos em um contexto assíncrono
-    
     # Inicia o bot
     logger.info("Bot iniciado! Pressione Ctrl+C para parar.")
     return application
 
-async def start_bot():
-    """Inicia o bot e as tarefas assíncronas"""
+if __name__ == '__main__':
+    # Configuração para evitar conflitos de múltiplas instâncias
     try:
-        # Cria a aplicação
+        # Cria e inicia a aplicação
         app = main()
-        
-        # Inicia a tarefa de verificação de notificações de vencimento
-        asyncio.create_task(verificar_notificacoes_vencimento(app))
-        
-        # Inicia o bot com polling
-        await app.start()
-        await app.updater.start_polling(
-            drop_pending_updates=True,
+        # Usa drop_pending_updates para evitar processamento de mensagens antigas
+        app.run_polling(
+            drop_pending_updates=True, 
             allowed_updates=["message", "callback_query", "chat_member"]
         )
-        
-        # Mantém o bot rodando até ser interrompido
-        await app.updater.stop()
-        await app.stop()
-        
     except telegram.error.Conflict:
         logger.error("Conflito detectado: outra instância do bot já está em execução.")
         logger.info("Tentando reiniciar com configurações diferentes...")
-        
         # Tenta novamente com configurações diferentes
         app = main()
-        await app.start()
-        await app.updater.start_polling(
-            drop_pending_updates=True,
+        app.run_polling(
+            drop_pending_updates=True, 
             allowed_updates=["message", "callback_query", "chat_member"]
         )
-        
-        # Mantém o bot rodando até ser interrompido
-        await app.updater.stop()
-        await app.stop()
-        
     except Exception as e:
         logger.error(f"Erro ao iniciar o bot: {e}")
-
-if __name__ == '__main__':
-    # Executa a função assíncrona principal
-    asyncio.run(start_bot())
