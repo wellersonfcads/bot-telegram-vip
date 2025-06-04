@@ -27,9 +27,8 @@ SEU_USER_ID = 6150001511  # Seu user ID do Telegram
 CANAL_VIP_ID = "-1002280243232"  # ID do seu canal VIP
 BOT_TOKEN = "7963030995:AAE8K5RIFJpaOhxLnDxJ4k614wnq4n549AQ"
 
-# Configurações do bot de vídeo
-VIDEO_BOT_TOKEN = "7828157079:AAEtf8Rm4qWdmmTSWp-yTO8EPX1w1oH2_SQ"  # Token do bot que hospeda o vídeo
-VIDEO_CHANNEL_ID = "-1002511850025"  # ID do canal que hospeda o vídeo
+# ID do vídeo de apresentação
+VIDEO_FILE_ID = "BAACAgEAAyEGAASVt8opAAMHaD-iEtoaQ_BwxO8AAQdFGScwBkMiAAKnDQAC18ABRi-6C5NIW-MXNgQ"
 
 # Links PIX (seus códigos originais)
 LINKS_PIX = {
@@ -139,19 +138,13 @@ async def enviar_video_apresentacao(context: ContextTypes.DEFAULT_TYPE):
     user_id = job_data["user_id"]
     
     try:
-        # Criando uma instância separada do bot para enviar o vídeo
-        video_bot = Bot(token=VIDEO_BOT_TOKEN)
-        
-        # Enviando o vídeo usando o file_id fornecido
-        await video_bot.send_video(
+        # Usando a instância principal do bot para enviar o vídeo
+        await context.bot.send_video(
             chat_id=chat_id,
-            video="BAACAgEAAyEGAASVt8opAAMHaD-iEtoaQ_BwxO8AAQdFGScwBkMiAAKnDQAC18ABRi-6C5NIW-MXNgQ"
+            video=VIDEO_FILE_ID
         )
         
-        # Fechando a conexão do bot de vídeo
-        await video_bot.close()
-        
-        logger.info(f"Vídeo enviado com sucesso para o usuário {user_id} usando o bot de vídeo")
+        logger.info(f"Vídeo enviado com sucesso para o usuário {user_id}")
     except Exception as e:
         logger.error(f"Erro ao enviar vídeo: {e}")
         # Envia uma mensagem alternativa em caso de falha
