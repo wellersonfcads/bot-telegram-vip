@@ -47,14 +47,14 @@ if not TELEGRAM_BOT_TOKEN:
     logger.critical("ERRO CRÍTICO: Variável de ambiente TELEGRAM_BOT_TOKEN não definida.")
     exit(1)
 
-# Links PIX (iguais)
+# Links PIX
 LINKS_PIX = {
     "1_mes": "00020101021126580014br.gov.bcb.pix01369cf720a7-fa96-4b33-8a37-76a401089d5f520400005303986540539.905802BR5919AZ FULL ADMINISTRAC6008BRASILIA6207050363044086",
     "3_meses": "00020101021126580014br.gov.bcb.pix01369cf720a7-fa96-4b33-8a37-76a401089d5f520400005303986540599.905802BR5919AZ FULL ADMINISTRAC6008BRASILIA6207050363041E24",
     "6_meses": "00020101021126580014br.gov.bcb.pix01369cf720a7-fa96-4b33-8a37-76a401089d5f5204000053039865406179.905802BR5919AZ FULL ADMINISTRAC6008BRASILIA6207050363043084",
     "12_meses": "00020101021126580014br.gov.bcb.pix01369cf720a7-fa96-4b33-8a37-76a401089d5f5204000053039865406289.905802BR5919AZ FULL ADMINISTRAC6008BRASILIA620705036304CD13"
 }
-# Planos e valores (iguais)
+# Planos e valores
 PLANOS = {
     "1_mes": {"nome": "Plano VIP 1 mês", "valor": "R$ 39,90", "dias": 30},
     "3_meses": {"nome": "Plano VIP 3 meses", "valor": "R$ 99,90", "dias": 90},
@@ -81,16 +81,12 @@ def init_db():
         ''')
         conn.commit()
 
-# --- Função Utilitária para Escapar MarkdownV2 ---
 def escape_markdown_v2(text: str) -> str:
     """Escapa caracteres especiais para MarkdownV2."""
+    # Note que ` dentro de `code spans` ou ```code blocks``` não devem ser escapados.
+    # Esta função simples escapa tudo. Para casos complexos, uma análise mais detalhada seria necessária.
     escape_chars = r'_*[]()~`>#+-=|{}.!'
     return "".join(f"\\{char}" if char in escape_chars else char for char in text)
-
-# ... (Suas funções de handler: start, handle_idade, enviar_video_apresentacao, etc. ... )
-# ... Elas permanecem as mesmas, mas se enviarem mensagens com ParseMode.MARKDOWN_V2 ...
-# ... e contiverem dados variáveis (como nomes de plano, usernames), esses dados ...
-# ... também devem ser escapados com escape_markdown_v2() antes de serem inseridos nas f-strings.
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -99,12 +95,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("❌ Não tenho 18 anos", callback_data="idade_nao")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
+    
+    texto_start = (
         "🔞 *VERIFICAÇÃO DE IDADE* 🔞\n\n"
         "Oi amor! Antes de continuarmos, preciso confirmar:\n"
-        "Você tem 18 anos ou mais?",
+        "Você tem 18 anos ou mais?"
+    )
+    await update.message.reply_text(
+        escape_markdown_v2(texto_start), # CORRIGIDO: Texto escapado
         reply_markup=reply_markup,
-        parse_mode=ParseMode.MARKDOWN_V2 # Alterado para MARKDOWN_V2
+        parse_mode=ParseMode.MARKDOWN_V2
     )
 
 async def handle_idade(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -112,22 +112,27 @@ async def handle_idade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     if query.data == "idade_nao":
+        texto_idade_nao = (
+            "❌ Desculpe amor, meu conteúdo é apenas para maiores de 18 anos.\n\n"
+            "Volte quando completar 18 anos! 😊"
+        )
         await query.edit_message_text(
-            "❌ Desculpe amor, meu conteúdo é apenas para maiores de 18 anos\\.\n\n" # Ponto escapado
-            "Volte quando completar 18 anos\\! 😊" # Exclamação escapada
-            # Emojis geralmente são seguros
-        ) # parse_mode não precisa ser especificado para edit_message_text se a msg original não tinha e o texto é simples
-          # Mas se for usar markdown, especifique: parse_mode=ParseMode.MARKDOWN_V2
+            escape_markdown_v2(texto_idade_nao), # CORRIGIDO: Texto escapado
+            parse_mode=ParseMode.MARKDOWN_V2 
+        )
         return
     
     if query.data == "idade_ok":
         user_id = query.from_user.id
         user_states[user_id] = "idade_verificada"
-        await query.edit_message_text(
-            escape_markdown_v2("🥰 *Bom te ver por aqui...*\n\n"
+        texto_idade_ok = (
+            "🥰 *Bom te ver por aqui...*\n\n"
             "Que bom que você chegou até mim! "
             "Estou muito animada para te mostrar tudo que preparei especialmente para você...\n\n"
-            "Vou te enviar um vídeo especial em alguns segundos! 💕"), # Escapando toda a string por segurança
+            "Vou te enviar um vídeo especial em alguns segundos! 💕"
+        )
+        await query.edit_message_text(
+            escape_markdown_v2(texto_idade_ok),
             parse_mode=ParseMode.MARKDOWN_V2
         )
         context.application.job_queue.run_once(
@@ -141,13 +146,13 @@ async def enviar_video_apresentacao(context: ContextTypes.DEFAULT_TYPE):
     chat_id = job_data["chat_id"]
     texto_video = (
         "🎥 *[VÍDEO DE APRESENTAÇÃO]*\n\n"
-        "Oi amor\\! Sou a Clarinha e estou muito feliz que você chegou até aqui\\! ✨\n\n"
+        "Oi amor! Sou a Clarinha e estou muito feliz que você chegou até aqui! ✨\n\n"
         "_[Aqui seria seu vídeo de apresentação]_\n\n"
-        "No meu VIP você vai encontrar conteúdos exclusivos que não posto em lugar nenhum\\.\\.\\. 🔥"
+        "No meu VIP você vai encontrar conteúdos exclusivos que não posto em lugar nenhum... 🔥"
     )
     await context.bot.send_message(
         chat_id=chat_id,
-        text=escape_markdown_v2(texto_video), # Escapando
+        text=escape_markdown_v2(texto_video),
         parse_mode=ParseMode.MARKDOWN_V2
     )
     context.application.job_queue.run_once(
@@ -170,11 +175,11 @@ async def mostrar_acesso_vip(context: ContextTypes.DEFAULT_TYPE):
         "💕 Conteúdo que não posto em lugar nenhum\n"
         "🎯 Acesso direto comigo\n"
         "✨ Surpresas especiais só para meus VIPs\n\n"
-        "Clica no botão abaixo para ver os planos disponíveis\\! 👇"
+        "Clica no botão abaixo para ver os planos disponíveis! 👇"
     )
     await context.bot.send_message(
         chat_id=chat_id,
-        text=escape_markdown_v2(texto_acesso), # Escapando
+        text=escape_markdown_v2(texto_acesso),
         reply_markup=reply_markup,
         parse_mode=ParseMode.MARKDOWN_V2
     )
@@ -182,8 +187,6 @@ async def mostrar_acesso_vip(context: ContextTypes.DEFAULT_TYPE):
 async def mostrar_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    # Nomes de planos e valores são inseridos nos botões, não precisam de escape aqui
-    # A mensagem de texto principal sim.
     keyboard = [
         [InlineKeyboardButton(f"💎 {PLANOS['1_mes']['nome']} - {PLANOS['1_mes']['valor']}", callback_data="plano_1_mes")],
         [InlineKeyboardButton(f"💎 {PLANOS['3_meses']['nome']} - {PLANOS['3_meses']['valor']}", callback_data="plano_3_meses")],
@@ -194,12 +197,12 @@ async def mostrar_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto_planos = (
         "💎 *MEUS PLANOS VIP DISPONÍVEIS*\n\n"
         "Escolhe o plano que mais combina com você, amor:\n\n"
-        "✨ Todos os planos incluem acesso completo ao meu conteúdo exclusivo\\!\n"
-        "🔥 Quanto maior o plano, melhor o custo\\-benefício\\!\n\n" # traço precisa de escape
+        "✨ Todos os planos incluem acesso completo ao meu conteúdo exclusivo!\n"
+        "🔥 Quanto maior o plano, melhor o custo-benefício!\n\n"
         "Clica no plano desejado:"
     )
     await query.edit_message_text(
-        escape_markdown_v2(texto_planos), # Escapando
+        escape_markdown_v2(texto_planos),
         reply_markup=reply_markup,
         parse_mode=ParseMode.MARKDOWN_V2
     )
@@ -221,10 +224,9 @@ async def detalhes_plano(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # Escapar partes variáveis da mensagem
     nome_plano_escapado = escape_markdown_v2(plano['nome'])
     valor_plano_escapado = escape_markdown_v2(plano['valor'])
-    dias_plano_escapado = escape_markdown_v2(str(plano['dias'])) # Converter para str antes de escapar
+    dias_plano_escapado = escape_markdown_v2(str(plano['dias']))
 
     texto_detalhes = (
         f"💎 *{nome_plano_escapado}*\n\n"
@@ -236,10 +238,10 @@ async def detalhes_plano(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ Minhas fotos e vídeos que não posto em lugar nenhum\n"
         f"✅ Contato direto comigo\n"
         f"✅ Meus novos conteúdos adicionados regularmente\n\n"
-        f"Clique em 'Gerar PIX' para continuar\\! 👇"
+        f"Clique em 'Gerar PIX' para continuar! 👇"
     )
     await query.edit_message_text(
-        texto_detalhes, # Já está escapado
+        escape_markdown_v2(texto_detalhes), 
         reply_markup=reply_markup,
         parse_mode=ParseMode.MARKDOWN_V2
     )
@@ -253,14 +255,13 @@ async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(escape_markdown_v2("❌ Ops! Algo deu errado ao gerar o PIX. Tente novamente."), parse_mode=ParseMode.MARKDOWN_V2)
         return
     plano = PLANOS[plano_key]
-    pix_code = LINKS_PIX[plano_key] # Código PIX já é uma string complexa, não deve ser formatada
+    pix_code = LINKS_PIX[plano_key] 
     user_id = query.from_user.id
     username = query.from_user.username or "Não informado"
     with sqlite3.connect('vip_bot.db', timeout=10) as conn:
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT INTO pagamentos_pendentes 
-            (user_id, username, plano, valor, data_solicitacao) 
+            INSERT INTO pagamentos_pendentes (user_id, username, plano, valor, data_solicitacao) 
             VALUES (?, ?, ?, ?, ?)
         ''', (user_id, username, plano_key, plano['valor'], datetime.now().isoformat()))
         conn.commit()
@@ -273,13 +274,12 @@ async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     nome_plano_escapado = escape_markdown_v2(plano['nome'])
     valor_plano_escapado = escape_markdown_v2(plano['valor'])
-    # pix_code_escapado = escape_markdown_v2(pix_code) # PIX code é para ser copiado literal, não escapar.
 
     texto_gerar_pix = (
-        f"💳 *PIX para Pagamento \\- {nome_plano_escapado}*\n\n" # traço escapado
+        f"💳 *PIX para Pagamento \\- {nome_plano_escapado}*\n\n"
         f"💰 Valor: *{valor_plano_escapado}*\n\n"
-        f"📋 *Código PIX \\(Copia e Cola\\):*\n" # parênteses escapados
-        f"`{pix_code}`\n\n" # Código PIX dentro de `code block` não precisa de escape interno
+        f"📋 *Código PIX \\(Copia e Cola\\):*\n"
+        f"`{pix_code}`\n\n" 
         f"📱 *Como pagar:*\n"
         f"1️⃣ Clique em 'Copiar PIX' abaixo\\.\n"
         f"2️⃣ Abra seu app bancário e escolha PIX > Copia e Cola\\.\n"
@@ -288,12 +288,11 @@ async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💕 Estou ansiosa para te receber no meu VIP, amor\\!"
     )
     await query.edit_message_text(
-        texto_gerar_pix, # Já está escapado
+        texto_gerar_pix, # Já foi construído com escapes
         reply_markup=reply_markup,
         parse_mode=ParseMode.MARKDOWN_V2
     )
     
-    # Notificação para admin
     admin_notify_text = (
         f"🔔 *NOVA SOLICITAÇÃO DE PAGAMENTO*\n\n"
         f"👤 Usuário: @{escape_markdown_v2(username)} \\(ID: {user_id}\\)\n"
@@ -303,13 +302,12 @@ async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await context.bot.send_message(
         chat_id=ADMIN_ID,
-        text=admin_notify_text, # Já está escapado
+        text=admin_notify_text, 
         parse_mode=ParseMode.MARKDOWN_V2
     )
 
 async def copiar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    # Texto de alerta não suporta Markdown
     await query.answer("PIX copiado! 📋\nCole no seu app bancário na opção PIX > Copia e Cola", show_alert=True)
 
 async def ja_paguei(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -320,15 +318,15 @@ async def ja_paguei(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_states[user_id] = {"aguardando_comprovante": plano_key}
     texto_ja_paguei = (
         "📎 *Envio de Comprovante*\n\n"
-        "Perfeito, amor\\! Agora preciso do seu comprovante de pagamento para liberar seu acesso ao meu VIP\\.\n\n"
+        "Perfeito, amor! Agora preciso do seu comprovante de pagamento para liberar seu acesso ao meu VIP.\n\n"
         "📸 *Como me enviar:*\n"
-        "Envie diretamente nesta conversa a foto ou screenshot do seu comprovante\\.\n\n"
+        "Envie diretamente nesta conversa a foto ou screenshot do seu comprovante.\n\n"
         "Pode ser:\n"
         "• Screenshot da tela de confirmação\n"
         "• Foto do comprovante\n"
         "• Print do extrato\n\n"
-        "✅ Assim que eu verificar, vou liberar seu acesso imediatamente\\!\n\n"
-        "💕 Obrigada pela confiança, amor\\!"
+        "✅ Assim que eu verificar, vou liberar seu acesso imediatamente!\n\n"
+        "💕 Obrigada pela confiança, amor!"
     )
     await query.edit_message_text(
         escape_markdown_v2(texto_ja_paguei),
@@ -345,8 +343,7 @@ async def receber_comprovante(update: Update, context: ContextTypes.DEFAULT_TYPE
     if plano_key not in PLANOS:
         await update.message.reply_text(escape_markdown_v2("❌ Erro: Plano não reconhecido ao processar comprovante. Contate o suporte."), parse_mode=ParseMode.MARKDOWN_V2)
         logger.error(f"Plano_key '{plano_key}' não encontrado em PLANOS ao receber comprovante do user {user_id}")
-        if user_id in user_states:
-            del user_states[user_id]
+        if user_id in user_states: del user_states[user_id]
         return
     plano = PLANOS[plano_key]
     with sqlite3.connect('vip_bot.db', timeout=10) as conn:
@@ -359,10 +356,10 @@ async def receber_comprovante(update: Update, context: ContextTypes.DEFAULT_TYPE
     if user_id in user_states: del user_states[user_id]
     
     texto_conf_user = (
-        "✅ *Comprovante Recebido\\!*\n\n"
-        "Perfeito, amor\\! Recebi seu comprovante e vou verificar agora mesmo\\.\n\n"
-        "⏰ Em poucos minutos você receberá o link de acesso ao meu grupo VIP\\!\n\n"
-        "💕 Obrigada pela paciência, amor\\!"
+        "✅ *Comprovante Recebido!* \n\n" # Escapado se necessário, mas ! no final de *bold* é ok
+        "Perfeito, amor! Recebi seu comprovante e vou verificar agora mesmo.\n\n"
+        "⏰ Em poucos minutos você receberá o link de acesso ao meu grupo VIP!\n\n"
+        "💕 Obrigada pela paciência, amor!"
     )
     await update.message.reply_text(escape_markdown_v2(texto_conf_user), parse_mode=ParseMode.MARKDOWN_V2)
     
@@ -436,8 +433,7 @@ async def processar_aprovacao(update: Update, context: ContextTypes.DEFAULT_TYPE
                 ''', (user_id_pagante, plano_key))
                 conn.commit()
             
-            # Mensagem para o usuário
-            link_escapado = escape_markdown_v2(link_convite.invite_link) # Escapar o link para o usuário
+            link_escapado = escape_markdown_v2(link_convite.invite_link)
             plano_nome_escapado = escape_markdown_v2(plano['nome'])
             data_exp_formatada_user = escape_markdown_v2(data_expiracao.strftime('%d/%m/%Y'))
 
@@ -458,7 +454,6 @@ async def processar_aprovacao(update: Update, context: ContextTypes.DEFAULT_TYPE
                 chat_id=user_id_pagante, text=texto_para_usuario, parse_mode=ParseMode.MARKDOWN_V2
             )
             
-            # Mensagem para o admin
             username_pagante_escapado = escape_markdown_v2(username_pagante)
             valor_plano_escapado = escape_markdown_v2(plano['valor'])
             horario_aprov_escapado = escape_markdown_v2(datetime.now().strftime('%d/%m/%Y %H:%M'))
@@ -502,15 +497,11 @@ async def processar_aprovacao(update: Update, context: ContextTypes.DEFAULT_TYPE
         horario_rejeicao_escapado = escape_markdown_v2(datetime.now().strftime('%d/%m/%Y %H:%M'))
         caption_rejeicao_admin = (
             f"❌ *ACESSO REJEITADO*\n\n"
-            f"👤 Usuário: ID {user_id_pagante}\n" # ID não precisa escapar
+            f"👤 Usuário: ID {user_id_pagante}\n"
             f"💎 Plano: {plano_nome_escapado}\n"
             f"⏰ Rejeitado em: {horario_rejeicao_escapado}"
         )
         await query.edit_message_caption(caption=caption_rejeicao_admin, parse_mode=ParseMode.MARKDOWN_V2)
-
-# ... (Restante das funções: listar_usuarios, remover_usuarios_expirados_job, etc., até verificar_novo_membro)
-# ... Essas funções também precisam ter seus textos revisados para ParseMode.MARKDOWN_V2 e escape se necessário ...
-# ... Vou aplicar as correções mais óbvias nelas ...
 
 async def listar_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
@@ -538,16 +529,16 @@ async def listar_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
             dias_rest_texto = escape_markdown_v2("N/A")
             logger.warning(f"Data de expiração inválida '{data_exp_iso}' para usuário {uid}")
 
-        texto_final += f"👤 ID: {uid} \\(@{uname_esc}\\)\n" # @ não é especial em MDV2, mas parênteses sim
+        texto_final += f"👤 ID: {uid} \\(@{uname_esc}\\)\n" 
         texto_final += f"💎 Plano: {plano_nome_esc}\n"
         texto_final += f"📅 Expira em: {exp_formatada}\n"
         texto_final += f"⏰ Dias restantes: {dias_rest_texto}\n\n"
     
     texto_final += "\n💡 *Para remover um usuário, use:*\n"
-    texto_final += escape_markdown_v2("/remover ID_DO_USUARIO") # Comando é melhor escapar se for mostrado como texto
+    texto_final += escape_markdown_v2("/remover ID_DO_USUARIO") 
     
-    if len(texto_final) > 4096: # Telegram tem limite de tamanho de mensagem
-        for i in range(0, len(texto_final), 4000): # Dividir em partes menores
+    if len(texto_final) > 4096: 
+        for i in range(0, len(texto_final), 4000): 
             await update.message.reply_text(texto_final[i:i+4000], parse_mode=ParseMode.MARKDOWN_V2)
     else:
         await update.message.reply_text(texto_final, parse_mode=ParseMode.MARKDOWN_V2)
@@ -685,7 +676,6 @@ async def verificar_novo_membro(update: Update, context: ContextTypes.DEFAULT_TY
         else:
             logger.info(f"AUTORIZADO: {user_id_novo} (@{username_novo_esc}) no VIP {CANAL_VIP_ID}.")
 
-
 # --- Funções de Keep-Alive ---
 def keep_alive_ping():
     host_url = os.environ.get('RENDER_EXTERNAL_URL')
@@ -693,7 +683,7 @@ def keep_alive_ping():
         logger.info("RENDER_EXTERNAL_URL não definida. Auto-ping desativado.")
         return
     
-    time.sleep(45) # Aumentado para dar mais tempo para o servidor HTTP iniciar
+    time.sleep(45) 
     logger.info(f"Keep-alive auto-ping iniciado para {host_url}.")
 
     while True:
@@ -702,7 +692,7 @@ def keep_alive_ping():
                 logger.info(f"Keep-alive ping para {host_url} status {response.status}.")
         except Exception as e:
             logger.error(f"Erro no keep-alive ping para {host_url}: {e}")
-        time.sleep(10 * 60) # A cada 10 minutos 
+        time.sleep(10 * 60) 
 
 class KeepAliveHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
@@ -726,7 +716,6 @@ def start_keep_alive_server():
 
 # --- Funções Principais de Configuração e Execução do Bot ---
 def configure_application():
-    """Configura e retorna o objeto Application do bot."""
     init_db()
     
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
@@ -771,6 +760,21 @@ async def pre_run_bot_operations(application: Application):
         logger.error(msg="Exceção durante o processamento de um update:", exc_info=context.error)
         if isinstance(context.error, telegram.error.Conflict):
             logger.critical("CONFLITO TELEGRAM DURANTE OPERAÇÃO. Outra instância do bot provavelmente está rodando.")
+        elif isinstance(context.error, telegram.error.BadRequest) and "Can't parse entities" in str(context.error):
+             logger.error(f"Erro de parsing de Markdown/HTML: {context.error}")
+             if update and hasattr(update, 'effective_chat') and update.effective_chat:
+                 try:
+                    await context.bot.send_message(
+                        chat_id=ADMIN_ID,
+                        text=f"⚠️ Erro de parsing de entidade ao tentar enviar mensagem para o chat {update.effective_chat.id} ou para o usuário.\n"
+                             f"Erro: {html.escape(str(context.error))}\n"
+                             f"Update problemático: {html.escape(str(update))}"[:4000], # Limita tamanho
+                        parse_mode=ParseMode.HTML
+                    )
+                 except Exception as e_notify:
+                    logger.error(f"Falha ao notificar admin sobre erro de parsing: {e_notify}")
+
+
     application.add_error_handler(error_handler_callback)
     logger.info("Error handler global adicionado à aplicação.")
 
@@ -821,18 +825,20 @@ async def run_bot_async():
         logger.critical(f"Erro crítico durante a execução do bot (polling/start): {e}", exc_info=True)
     finally:
         logger.info("Iniciando processo de shutdown do bot...")
-        # Verifica se 'application' foi definida e se tem 'updater'
-        if 'application' in locals() and application and hasattr(application, 'updater') and application.updater:
-            if application.running: 
+        if 'application' in locals() and application: # Verificação mais simples
+            if hasattr(application, 'running') and application.running: 
                 logger.info("Parando o dispatcher de updates (application.stop())...")
                 await application.stop()
-            if application.updater.is_running: 
+            if hasattr(application, 'updater') and application.updater and hasattr(application.updater, 'is_running') and application.updater.is_running: 
                 logger.info("Parando o polling de updates (application.updater.stop())...")
                 await application.updater.stop()
-            logger.info("Realizando shutdown da aplicação (application.shutdown())...")
-            await application.shutdown() 
+            if hasattr(application, 'shutdown'):
+                logger.info("Realizando shutdown da aplicação (application.shutdown())...")
+                await application.shutdown() 
+            else:
+                logger.warning("Atributo 'shutdown' não encontrado no objeto application.")
         else:
-            logger.warning("Objeto Application ou Updater não completamente inicializado para shutdown.")
+            logger.warning("Objeto Application não definido ou não completamente inicializado para shutdown.")
         logger.info("Shutdown do bot concluído.")
 
 if __name__ == '__main__':
