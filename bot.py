@@ -5,8 +5,8 @@ import time
 from datetime import datetime, timedelta
 import telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, constants as TGConstants
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ChatMemberHandler, filters, ContextTypes, Job # Job importado
-from telegram.constants import ParseMode # Corrigido: removido espaço extra
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ChatMemberHandler, filters, ContextTypes, Job
+from telegram.constants import ParseMode
 import os
 import http.server
 import socketserver
@@ -94,13 +94,18 @@ def remover_jobs_lembrete_anteriores(user_id: int, context: ContextTypes.DEFAULT
     if user_id in user_states and isinstance(user_states[user_id], dict) and 'pending_reminder_jobs' in user_states[user_id]:
         current_jobs = user_states[user_id].get('pending_reminder_jobs', [])
         if current_jobs:
-            logger.info(f"Removendo {len(current_jobs)} jobs de lembrete pendentes para user {user_id}.")
+            logger.info(f"Tentando remover {len(current_jobs)} jobs de lembrete pendentes para user {user_id}.")
             for job_obj in current_jobs: 
                 if job_obj and isinstance(job_obj, Job): 
                     try:
                         job_obj.schedule_removal()
-                    except Exception as e_remove: # Adicionado para capturar erro ao remover job
-                        logger.error(f"Erro ao tentar remover job {job_obj.name}: {e_remove}")
+                    except Exception as e_remove: 
+                        # É esperado que jobs já executados não sejam encontrados. Silenciar esse erro específico.
+                        if "No job by the id of" not in str(e_remove).lower() and \
+                           "Job has already been removed" not in str(e_remove).lower() and \
+                           "trigger has been changed" not in str(e_remove).lower() and \
+                           "job has already been scheduled for removal" not in str(e_remove).lower() : # Adicionado para cobrir mais casos
+                            logger.error(f"Erro inesperado ao tentar remover job {job_obj.name}: {e_remove}")
             user_states[user_id]['pending_reminder_jobs'] = [] 
     elif user_id in user_states:
         logger.warning(f"Estrutura de user_states[{user_id}] inesperada ao tentar remover jobs: {user_states[user_id]}")
@@ -131,6 +136,7 @@ async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Executando lembrete {delay} para user {user_id} no contexto '{estado_esperado_no_job}'.")
     mensagem = ""
     keyboard_lembrete = None
+    sent_reminder_message = None # Para armazenar a mensagem enviada
 
     if estado_esperado_no_job == "aguardando_verificacao_idade":
         if delay == "1min_idade":
@@ -146,6 +152,7 @@ async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("❌ Não tenho 18 anos", callback_data="idade_nao")]
             ])
 
+    # ... (outros elif para visualizando_planos, visualizando_detalhes_)
     elif estado_esperado_no_job == "visualizando_planos":
         if delay == "1min":
             mensagem = "Ei, vi que você está de olho nos meus planos VIP 👀\\! Qual deles chamou mais sua atenção, amor? Não perca tempo, o conteúdo exclusivo te espera\\! 🔥"
@@ -162,8 +169,6 @@ async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
     elif estado_esperado_no_job.startswith("visualizando_detalhes_"):
         if plano_key_lembrete and plano_key_lembrete in PLANOS:
             plano_nome = PLANOS[plano_key_lembrete]['nome']
-            # Não precisa escapar plano_nome aqui, pois ele é usado no texto do botão que não usa Markdown.
-            # E na mensagem, plano_nome_escapado é usado.
             plano_nome_escapado = escape_markdown_v2(plano_nome)
             if delay == "1min":
                 mensagem = f"Percebi que você curtiu o *{plano_nome_escapado}*, hein? 😉 Ele é incrível mesmo\\! Que tal gerar o PIX agora e garantir seu lugarzinho no céu? 🔞"
@@ -181,15 +186,28 @@ async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"Chave de plano inválida '{plano_key_lembrete}' no callback_lembrete para detalhes.")
             return
 
+
     if mensagem:
         try:
-            await context.bot.send_message(
+            sent_reminder_message = await context.bot.send_message( # Armazena a mensagem enviada
                 chat_id=chat_id, 
                 text=mensagem, 
                 reply_markup=keyboard_lembrete,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
-            logger.info(f"Lembrete {delay} enviado para user {user_id} no contexto '{estado_esperado_no_job}'.")
+            # Se for um lembrete de idade, adiciona o message_id
+            if estado_esperado_no_job == "aguardando_verificacao_idade" and sent_reminder_message:
+                if user_id in user_states and isinstance(user_states[user_id], dict):
+                    if 'age_verification_message_ids' not in user_states[user_id] or \
+                       not isinstance(user_states[user_id].get('age_verification_message_ids'), list):
+                        user_states[user_id]['age_verification_message_ids'] = []
+                    user_states[user_id]['age_verification_message_ids'].append(sent_reminder_message.message_id)
+                    logger.info(f"Lembrete {delay} (MsgID: {sent_reminder_message.message_id}) enviado e ID armazenado para user {user_id}.")
+                else: # Caso user_states[user_id] não seja um dict (pouco provável aqui)
+                    logger.warning(f"user_states[{user_id}] não é dict ao tentar armazenar age_verification_message_id.")
+            else:
+                 logger.info(f"Lembrete {delay} enviado para user {user_id} no contexto '{estado_esperado_no_job}'.")
+
         except telegram.error.BadRequest as br_err:
             logger.error(f"BadRequest ao enviar lembrete {delay} para user {user_id} (chat {chat_id}): {br_err}. Mensagem: '{mensagem}'", exc_info=True)
         except Exception as e:
@@ -200,7 +218,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id 
 
     remover_jobs_lembrete_anteriores(user_id, context) 
-    user_states[user_id] = {"state": "aguardando_verificacao_idade", "pending_reminder_jobs": []} 
+    
+    # Garante que user_states[user_id] seja um dict antes de adicionar chaves
+    if user_id not in user_states or not isinstance(user_states.get(user_id), dict):
+        user_states[user_id] = {} 
+    
+    user_states[user_id].update({
+        "state": "aguardando_verificacao_idade", 
+        "pending_reminder_jobs": [],
+        "age_verification_message_ids": [] # Inicializa a lista aqui
+    })
+    logger.info(f"[START] User {user_id} iniciou. Estado definido para 'aguardando_verificacao_idade'.")
 
     keyboard = [
         [InlineKeyboardButton("✅ Sim, tenho 18 anos ou mais", callback_data="idade_ok")],
@@ -213,17 +241,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Oi amor\\! Antes de continuarmos, preciso confirmar:\n" 
         "Você tem 18 anos ou mais?"
     )
-    await update.message.reply_text(
-        texto_start, 
-        reply_markup=reply_markup,
-        parse_mode=ParseMode.MARKDOWN_V2
-    )
+    try:
+        sent_message = await update.message.reply_text( # Armazena a mensagem enviada
+            texto_start, 
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        # Adiciona o ID da mensagem inicial à lista
+        if sent_message and user_id in user_states and isinstance(user_states[user_id].get('age_verification_message_ids'), list):
+            user_states[user_id]['age_verification_message_ids'].append(sent_message.message_id)
+            logger.info(f"[START] Mensagem inicial de verificação (MsgID: {sent_message.message_id}) enviada e ID armazenado para user {user_id}.")
+
+    except Exception as e:
+        logger.error(f"[START] Erro ao enviar mensagem inicial para user {user_id}: {e}", exc_info=True)
+        return # Não prosseguir se a mensagem inicial falhar
 
     job_context_name_base = f"{JOB_LEMBRETE_IDADE_PREFIX}{user_id}"
     
-    # ATENÇÃO: Delays para PRODUÇÃO. Mude para valores menores para TESTE rápido (ex: 10, 20, 30).
-    # delays_lembrete = {"1min_idade": 10, "5min_idade": 20, "10min_idade": 30} # TESTE 
     delays_lembrete = {"1min_idade": 1*60, "5min_idade": 5*60, "10min_idade": 10*60} # PRODUÇÃO
+    # delays_lembrete = {"1min_idade": 10, "5min_idade": 20, "10min_idade": 30} # TESTE 
 
     jobs_agendados = []
     for delay_tag, delay_seconds in delays_lembrete.items():
@@ -235,7 +271,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         jobs_agendados.append(job)
     
-    if user_id in user_states and isinstance(user_states[user_id], dict):
+    if user_id in user_states and isinstance(user_states[user_id], dict): # Redundante devido à inicialização acima, mas seguro
          user_states[user_id]['pending_reminder_jobs'] = jobs_agendados
     else: 
         logger.warning(f"Estado para user {user_id} não era um dicionário ou não existia ao tentar armazenar jobs de lembrete de idade. Cancelando jobs.")
@@ -247,14 +283,47 @@ async def handle_idade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     chat_id = query.message.chat_id 
     
-    # Log detalhado no início do handler
     logger.info(f"[HANDLE_IDADE] Triggered. User: {user_id}, Data: {query.data}, Message ID: {query.message.message_id if query.message else 'N/A'}")
-    logger.info(f"[HANDLE_IDADE] User state ANTES de remover jobs: {user_states.get(user_id)}")
+    logger.info(f"[HANDLE_IDADE] User state ANTES de qualquer ação: {user_states.get(user_id)}")
 
-    await query.answer() # Responde ao callback o mais rápido possível
+    await query.answer() 
     
     remover_jobs_lembrete_anteriores(user_id, context)
-    logger.info(f"[HANDLE_IDADE] User state DEPOIS de remover jobs: {user_states.get(user_id)}")
+    
+    # Editar mensagens antigas de verificação de idade
+    if user_id in user_states and isinstance(user_states.get(user_id), dict):
+        message_ids_to_edit = user_states[user_id].get('age_verification_message_ids', [])
+        texto_finalizado = escape_markdown_v2("Esta verificação já foi processada. 😊")
+        
+        for msg_id in message_ids_to_edit:
+            # Não editar a mensagem atual aqui, pois ela será editada pela lógica principal abaixo
+            if query.message and msg_id == query.message.message_id:
+                continue
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=msg_id,
+                    text=texto_finalizado, 
+                    reply_markup=None, # Remove o teclado
+                    parse_mode=ParseMode.MARKDOWN_V2
+                )
+                logger.info(f"Mensagem de verificação de idade antiga (ID: {msg_id}) editada para user {user_id}.")
+            except telegram.error.BadRequest as e:
+                if "message to edit not found" in str(e).lower() or \
+                   "message can't be edited" in str(e).lower() or \
+                   "message is not modified" in str(e).lower() or \
+                   "chat not found" in str(e).lower(): # Adicionado chat not found
+                    logger.warning(f"Não foi possível editar mensagem de verificação antiga (ID: {msg_id}) para user {user_id}: {e}")
+                else:
+                    logger.error(f"Erro BadRequest ao editar msg antiga (ID: {msg_id}): {e}", exc_info=True)
+            except Exception as e:
+                logger.error(f"Erro geral ao editar msg antiga (ID: {msg_id}): {e}", exc_info=True)
+        
+        # Limpa a lista após processar, ou armazena a msg_id atual se precisar para a edição principal
+        if user_states.get(user_id): # Verifica se a chave ainda existe
+            user_states[user_id]['age_verification_message_ids'] = [] 
+
+    logger.info(f"[HANDLE_IDADE] User state DEPOIS de remover jobs e editar msgs antigas: {user_states.get(user_id)}")
     
     if query.data == "idade_nao":
         texto_idade_nao = (
@@ -262,35 +331,43 @@ async def handle_idade(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Volte quando completar 18 anos\\! 😊"
         )
         try:
-            await query.edit_message_text(
-                texto_idade_nao, 
-                parse_mode=ParseMode.MARKDOWN_V2 
-            )
+            if query.message: # Garante que query.message existe
+                await query.edit_message_text(
+                    text=texto_idade_nao, 
+                    parse_mode=ParseMode.MARKDOWN_V2 
+                )
         except telegram.error.BadRequest as e:
             if "message is not modified" in str(e).lower():
                 logger.warning(f"Mensagem de idade_nao não modificada para user {user_id}: {e}")
             else:
-                raise # Re-levanta outras BadRequests
-        user_states[user_id] = {"state": "idade_recusada", "pending_reminder_jobs": []} 
+                logger.error(f"Erro ao editar mensagem 'idade_nao' para user {user_id}: {e}", exc_info=True)
+
+        if user_id in user_states and isinstance(user_states.get(user_id), dict):
+            user_states[user_id].update({"state": "idade_recusada", "pending_reminder_jobs": []})
+        else: # Caso raro
+             user_states[user_id] = {"state": "idade_recusada", "pending_reminder_jobs": [], "age_verification_message_ids": []}
         logger.info(f"[HANDLE_IDADE] User {user_id} selecionou 'idade_nao'. Estado: {user_states[user_id]['state']}")
         return
     
     if query.data == "idade_ok":
-        user_states[user_id] = {"state": "idade_ok_proximo_passo", "pending_reminder_jobs": []}
+        if user_id in user_states and isinstance(user_states.get(user_id), dict):
+            user_states[user_id].update({"state": "idade_ok_proximo_passo", "pending_reminder_jobs": []})
+        else: # Caso raro
+            user_states[user_id] = {"state": "idade_ok_proximo_passo", "pending_reminder_jobs": [], "age_verification_message_ids": []}
         logger.info(f"[HANDLE_IDADE] User {user_id} selecionou 'idade_ok'. Novo estado: {user_states[user_id]['state']}")
         
         texto_boas_vindas = "🥰 Bom te ver por aqui\\.\\.\\."
         try:
-            await query.edit_message_text( 
-                texto_boas_vindas,
-                parse_mode=ParseMode.MARKDOWN_V2
-            )
+            if query.message: # Garante que query.message existe
+                await query.edit_message_text( 
+                    texto_boas_vindas,
+                    parse_mode=ParseMode.MARKDOWN_V2
+                )
         except telegram.error.BadRequest as e:
             if "message is not modified" in str(e).lower():
                 logger.warning(f"Mensagem de boas_vindas não modificada para user {user_id}: {e}")
             else:
                 logger.error(f"Erro ao editar mensagem de boas_vindas para user {user_id}: {e}", exc_info=True)
-                # Não prosseguir se a edição da mensagem falhar, a menos que seja "not modified"
                 if not ("message is not modified" in str(e).lower()):
                     return 
         
@@ -301,7 +378,10 @@ async def handle_idade(update: Update, context: ContextTypes.DEFAULT_TYPE):
             name=f"convite_vip_inicial_{user_id}"
         )
 
-async def enviar_convite_vip_inicial(context: ContextTypes.DEFAULT_TYPE):
+# ... (o restante do código permanece o mesmo, como enviar_convite_vip_inicial, mostrar_planos, etc.)
+# As funções de logging dentro de enviar_convite_vip_inicial, mostrar_planos, detalhes_plano e gerar_pix já são úteis.
+
+async def enviar_convite_vip_inicial(context: ContextTypes.DEFAULT_TYPE): # Nova função
     job_data = context.job.data
     chat_id = job_data["chat_id"]
     user_id = job_data["user_id"]
@@ -332,7 +412,6 @@ async def enviar_convite_vip_inicial(context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"Convite VIP inicial enviado para user {user_id}")
     except Exception as e:
         logger.error(f"Erro ao enviar convite VIP inicial para user {user_id}: {e}", exc_info=True)
-        # O estado do usuário não será alterado se a mensagem falhar, permitindo uma nova tentativa ou intervenção.
         return
     
     if user_id in user_states and isinstance(user_states[user_id], dict):
@@ -340,6 +419,7 @@ async def enviar_convite_vip_inicial(context: ContextTypes.DEFAULT_TYPE):
     else:
         user_states[user_id] = {"state": "convite_vip_enviado", "pending_reminder_jobs": []}
     logger.info(f"Estado do user {user_id} atualizado para: {user_states[user_id]['state']}")
+
 
 async def mostrar_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -369,15 +449,15 @@ async def mostrar_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     try:
-        if query.message: # Se originou de um callback com mensagem (normal)
+        if query.message: 
             await query.edit_message_text(
                 text=texto_planos,
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
-        else: # Fallback se não houver query.message (raro para este handler)
+        else: 
             await context.bot.send_message(
-                chat_id=user_id, # Assume chat_id é user_id se não houver query.message
+                chat_id=user_id, 
                 text=texto_planos,
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN_V2
@@ -388,12 +468,11 @@ async def mostrar_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"Mensagem de planos não modificada para user {user_id}: {e}")
         else:
             logger.error(f"Erro ao mostrar planos para user {user_id}: {e}", exc_info=True)
-            return # Não agendar jobs se a mensagem falhou
+            return 
 
     job_context_name_base = f"{JOB_LEMBRETE_PLANOS_PREFIX}{user_id}" 
     
-    delays_lembrete = {"1min": 1*60, "5min": 5*60, "10min": 10*60} # PRODUÇÃO
-    # delays_lembrete = {"1min": 10, "5min": 20, "10min": 30} # TESTE
+    delays_lembrete = {"1min": 1*60, "5min": 5*60, "10min": 10*60} 
 
     jobs_agendados = []
     for delay_tag, delay_seconds in delays_lembrete.items():
@@ -467,12 +546,11 @@ async def detalhes_plano(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"Mensagem de detalhes do plano não modificada para user {user_id}: {e}")
         else:
             logger.error(f"Erro ao mostrar detalhes do plano {plano_key} para user {user_id}: {e}", exc_info=True)
-            return # Não agendar jobs se a mensagem falhou
+            return 
 
     job_context_name_base = f"{JOB_LEMBRETE_DETALHES_PREFIX}{user_id}_{plano_key}"
     
-    delays_lembrete = {"1min": 1*60, "5min": 5*60, "10min": 10*60} # PRODUÇÃO
-    # delays_lembrete = {"1min": 10, "5min": 20, "10min": 30} # TESTE
+    delays_lembrete = {"1min": 1*60, "5min": 5*60, "10min": 10*60} 
 
     jobs_agendados = []
     for delay_tag, delay_seconds in delays_lembrete.items():
