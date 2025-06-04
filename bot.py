@@ -1071,6 +1071,3 @@ if __name__ == '__main__':
         logger.info("========================================")
         logger.info("=== SCRIPT PRINCIPAL DO BOT FINALIZADO ===")
         logger.info("========================================")
-
-mas quero que faça algumas alterações nesse codigo para min:
-quero que na função start, assim que o usuario clicar em sim, tenho mais de 18 anos ele vá para o proximo passo normalmente, mas se ele não clicar em nada, em 1 minutos, 5 minutos e 10 minutos, chegue 3 mensagens diferentes e convidativas para ele clicar em sim tenho mais de 18 anos.
