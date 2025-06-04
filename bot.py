@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timedelta
 import telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, constants as TGConstants
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ChatMemberHandler, filters, ContextTypes, Job # Job importado
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ChatMemberHandler, filters, ContextTypes, Job 
 from telegram.constants import ParseMode 
 import os
 import http.server
@@ -102,6 +102,7 @@ def remover_jobs_lembrete_anteriores(user_id: int, context: ContextTypes.DEFAULT
     elif user_id in user_states:
         logger.warning(f"Estrutura de user_states[{user_id}] inesperada ao tentar remover jobs: {user_states[user_id]}")
 
+
 async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
     if not job or not job.data:
@@ -129,7 +130,7 @@ async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
     mensagem = ""
     keyboard_lembrete = None
 
-    if estado_esperado_no_job == "aguardando_verificacao_idade":
+    if estado_esperado_no_job == "aguardando_verificacao_idade": # Lembretes para verificação de idade
         if delay == "1min_idade":
             mensagem = "Oi, amor\\! 😊 Notei que você ainda não confirmou sua idade\\. Para continuar e ter acesso a todas as surpresas que preparei, preciso dessa confirmação rapidinho\\! Clique abaixo se tiver 18 anos ou mais\\. 😉"
         elif delay == "5min_idade":
@@ -168,7 +169,6 @@ async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
                 mensagem = f"Última chamada para o paraíso com o *{plano_nome_escapado}*\\! 🚀 Clique em 'Gerar PIX' e venha matar sua curiosidade\\.\\.\\. prometo que vale a pena\\! 😏"
             
             if mensagem:
-                # Usar o nome do plano original no texto do botão para não ter escapes duplos ou parecer estranho
                 keyboard_lembrete = InlineKeyboardMarkup([
                     [InlineKeyboardButton(f"💳 Gerar PIX para {PLANOS[plano_key_lembrete]['nome']}", callback_data=f"gerar_pix_{plano_key_lembrete}")],
                     [InlineKeyboardButton("⬅️ Ver Outros Planos", callback_data="ver_planos")]
@@ -215,8 +215,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     job_context_name_base = f"{JOB_LEMBRETE_IDADE_PREFIX}{user_id}"
     
-    # ATENÇÃO: Delays para TESTE! Mude para produção (ex: 60, 300, 600)
-    delays_lembrete = {"1min_idade": 1*60, "5min_idade": 5*60, "10min_idade": 10*60} # <<<< AJUSTADO PARA TEMPOS DE PRODUÇÃO (1, 5, 10 minutos)
+    # ATENÇÃO: Delays para PRODUÇÃO (1min, 5min, 10min). Mude para valores menores para TESTE.
+    # delays_lembrete = {"1min_idade": 10, "5min_idade": 20, "10min_idade": 30} # TESTE
+    delays_lembrete = {"1min_idade": 1*60, "5min_idade": 5*60, "10min_idade": 10*60} # PRODUÇÃO
 
     jobs_agendados = []
     for delay_tag, delay_seconds in delays_lembrete.items():
@@ -241,7 +242,7 @@ async def handle_idade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = query.message.chat_id 
     await query.answer()
     
-    remover_jobs_lembrete_anteriores(user_id, context)
+    remover_jobs_lembrete_anteriores(user_id, context) # Remove lembretes de "aguardando_verificacao_idade"
     
     if query.data == "idade_nao":
         texto_idade_nao = (
@@ -256,59 +257,55 @@ async def handle_idade(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if query.data == "idade_ok":
-        # Estado para indicar que a idade foi confirmada e estamos prestes a enviar a próxima sequência
-        user_states[user_id] = {"state": "idade_ok_proximo_passo", "pending_reminder_jobs": []}
+        # Novo estado para indicar que a idade foi confirmada e o próximo passo é o convite VIP
+        user_states[user_id] = {"state": "idade_ok_aguardando_convite_vip", "pending_reminder_jobs": []}
         
-        texto_boas_vindas = "🥰 Bom te ver por aqui\\.\\.\\." # Primeira mensagem
+        texto_boas_vindas = "🥰 Bom te ver por aqui\\.\\.\\."
         await query.edit_message_text( 
             texto_boas_vindas,
             parse_mode=ParseMode.MARKDOWN_V2
         )
         
-        # Agendar o envio da segunda mensagem e do botão VIP
         context.application.job_queue.run_once(
-            enviar_segunda_mensagem_e_botao_vip, # NOVA FUNÇÃO COMBINADA
-            1, # Delay de 1 segundo para a segunda mensagem
+            enviar_convite_vip_inicial, # Nova função para o novo fluxo
+            1, # Delay de 1 segundo
             data={"chat_id": chat_id, "user_id": user_id},
-            name=f"segunda_msg_e_botao_vip_{user_id}"
+            name=f"convite_vip_inicial_{user_id}"
         )
 
-# REMOVER a função enviar_video_apresentacao (ou comentar se quiser guardar)
-# REMOVER a função mostrar_acesso_vip (ou comentar)
+# Função enviar_video_apresentacao removida/comentada
+# Função mostrar_acesso_vip removida/comentada
 
-# NOVA FUNÇÃO para enviar a segunda mensagem e o botão VIP
-async def enviar_segunda_mensagem_e_botao_vip(context: ContextTypes.DEFAULT_TYPE):
+async def enviar_convite_vip_inicial(context: ContextTypes.DEFAULT_TYPE): # Nova função
     job_data = context.job.data
     chat_id = job_data["chat_id"]
     user_id = job_data["user_id"]
 
-    # Verifica se o usuário ainda está no estado correto antes de prosseguir
-    if user_states.get(user_id, {}).get("state") != "idade_ok_proximo_passo":
-        logger.info(f"Envio da segunda mensagem e botão VIP para user {user_id} cancelado (estado mudou de 'idade_ok_proximo_passo').")
+    if user_states.get(user_id, {}).get("state") != "idade_ok_aguardando_convite_vip":
+        logger.info(f"Envio do convite VIP inicial para user {user_id} cancelado (estado mudou).")
         return
 
     texto_segunda_msg = "No meu VIP você vai encontrar conteúdos exclusivos que não posto em lugar nenhum\\.\\.\\. 🙊"
     
     keyboard_vip = [ 
-        [InlineKeyboardButton("⭐ GRUPO VIP", callback_data="ver_planos")] # Botão alterado
+        [InlineKeyboardButton("⭐ GRUPO VIP", callback_data="ver_planos")]
     ]
     reply_markup_vip = InlineKeyboardMarkup(keyboard_vip)
 
     await context.bot.send_message( 
         chat_id=chat_id,
         text=texto_segunda_msg, 
-        reply_markup=reply_markup_vip, # Envia o botão junto com esta mensagem
+        reply_markup=reply_markup_vip,
         parse_mode=ParseMode.MARKDOWN_V2
     )
     
-    # O estado será atualizado para "visualizando_planos" pela função mostrar_planos
-    # quando o usuário clicar no botão "⭐ GRUPO VIP" (callback "ver_planos").
-    # Nesse ponto, mostrar_planos agendará os lembretes para aquela etapa.
-    # Apenas atualizamos o estado aqui para indicar que o convite VIP foi mostrado.
+    # O próximo estado ("visualizando_planos") será definido quando o usuário clicar em "ver_planos"
+    # e a função mostrar_planos for chamada.
+    # Aqui, podemos definir um estado intermediário se necessário, ou apenas limpar os jobs pendentes.
     if user_id in user_states and isinstance(user_states[user_id], dict):
-        user_states[user_id]["state"] = "convite_vip_mostrado" 
+        user_states[user_id]["state"] = "convite_vip_enviado" 
     else:
-        user_states[user_id] = {"state": "convite_vip_mostrado", "pending_reminder_jobs": []}
+        user_states[user_id] = {"state": "convite_vip_enviado", "pending_reminder_jobs": []}
 
 
 async def mostrar_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -317,8 +314,6 @@ async def mostrar_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     remover_jobs_lembrete_anteriores(user_id, context) 
-
-    # Estado para indicar que o usuário está visualizando os planos
     user_states[user_id] = {"state": "visualizando_planos", "pending_reminder_jobs": []} 
 
     keyboard = [
@@ -335,30 +330,30 @@ async def mostrar_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔥 Quanto maior o plano, melhor o custo\\-benefício\\!\n" 
         "Clica no plano desejado:"
     )
-    # Verificar se a mensagem original foi enviada por send_message (não tem query.message.edit_message_text)
-    # ou se foi uma edição (tem query.message.edit_message_text)
-    # Como este handler é para callback "ver_planos", ele está editando uma mensagem anterior.
+    
+    # Se a mensagem anterior foi a do "convite_vip_enviado", editamos ela.
+    # Caso contrário (ex: vindo de "detalhes_plano" > "Ver Outros Planos"), também edita.
     if query.message:
-        await query.edit_message_text(
+         await query.edit_message_text(
             text=texto_planos,
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN_V2
         )
-    else: # Caso raro, mas se não houver mensagem para editar, envia uma nova
+    else: # Fallback, embora menos provável neste fluxo de callback
         await context.bot.send_message(
-            chat_id=user_id, # Envia para o chat do usuário
+            chat_id=user_id,
             text=texto_planos,
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN_V2
         )
 
-
-    chat_id = query.message.chat_id if query.message else user_id # Usa user_id como chat_id se query.message for None
+    chat_id = query.message.chat_id if query.message else user_id
     job_context_name_base = f"{JOB_LEMBRETE_PLANOS_PREFIX}{user_id}" 
     
-    # ATENÇÃO: Delays para TESTE! Mude para produção (ex: 60, 300, 600)
-    # delays_lembrete = {"1min": 10, "5min": 20, "10min": 30} 
-    delays_lembrete = {"1min": 60, "5min": 5*60, "10min": 10*60} # DELAYS DE PRODUÇÃO
+    # ATENÇÃO: Delays para PRODUÇÃO. Mude para valores menores para TESTE.
+    delays_lembrete = {"1min": 1*60, "5min": 5*60, "10min": 10*60} 
+    # delays_lembrete = {"1min": 10, "5min": 20, "10min": 30} # TESTE
+
 
     jobs_agendados = []
     for delay_tag, delay_seconds in delays_lembrete.items():
@@ -376,7 +371,6 @@ async def mostrar_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.warning(f"Estado para user {user_id} não era um dicionário ou não existia ao tentar armazenar jobs de lembrete de planos. Cancelando jobs.")
         for job_obj in jobs_agendados:
             if job_obj: job_obj.schedule_removal()
-
 
 async def detalhes_plano(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -426,10 +420,9 @@ async def detalhes_plano(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = query.message.chat_id
     job_context_name_base = f"{JOB_LEMBRETE_DETALHES_PREFIX}{user_id}_{plano_key}"
     
-    # ATENÇÃO: Delays para TESTE! Mude para produção (ex: 60, 300, 600)
-    delays_lembrete = {"1min": 60, "5min": 5*60, "10min": 10*60} # DELAYS DE PRODUÇÃO
-    # delays_lembrete = {"1min": 10, "5min": 20, "10min": 30} # DELAYS DE TESTE
-
+    # ATENÇÃO: Delays para PRODUÇÃO. Mude para valores menores para TESTE.
+    delays_lembrete = {"1min": 60, "5min": 5*60, "10min": 10*60} 
+    # delays_lembrete = {"1min": 10, "5min": 20, "10min": 30} # TESTE
 
     jobs_agendados = []
     for delay_tag, delay_seconds in delays_lembrete.items():
@@ -448,8 +441,12 @@ async def detalhes_plano(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for job_obj in jobs_agendados: 
             if job_obj: job_obj.schedule_removal()
 
-# ... (Resto do código a partir de gerar_pix permanece o mesmo que você já tem e está funcional)
-# ... (COLE O RESTANTE DO SEU CÓDIGO A PARTIR DAQUI)
+# --- O RESTANTE DO CÓDIGO (gerar_pix, copiar_pix, ja_paguei, receber_comprovante, etc.)
+# --- PERMANECE IGUAL AO QUE VOCÊ JÁ TINHA E ESTAVA FUNCIONAL ---
+# --- APENAS CERTIFIQUE-SE DE CHAMAR remover_jobs_lembrete_anteriores(user_id, context) ---
+# --- E ATUALIZAR user_states[user_id] = {"state": "novo_estado", "pending_reminder_jobs": []} ---
+# --- NAS FUNÇÕES QUE SIGNIFICAM UM AVANÇO NO FUNIL ---
+
 async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
