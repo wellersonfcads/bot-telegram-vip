@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 # Desativa logs HTTP desnecessários
 logging.getLogger('httpx').setLevel(logging.WARNING)
-logging.getLogger('apscheduler').setLevel(logging.WARNING) # Adicionado para reduzir verbosidade do APScheduler
+logging.getLogger('apscheduler').setLevel(logging.WARNING)
 
 # --- Configurações Lidas das Variáveis de Ambiente ---
 ADMIN_ID_STR = os.environ.get('ADMIN_ID')
@@ -66,7 +66,7 @@ user_states = {}
 
 def init_db():
     """Inicializa o banco de dados"""
-    conn = sqlite3.connect('vip_bot.db', timeout=10) # Adicionado timeout
+    conn = sqlite3.connect('vip_bot.db', timeout=10)
     cursor = conn.cursor()
     
     cursor.execute('''
@@ -300,23 +300,6 @@ async def ja_paguei(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
 
-# A função solicitar_comprovante pode ser removida se 'ja_paguei' já dá as instruções.
-# Se você tiver um botão "Enviar Comprovante" que chama 'enviar_comprovante', mantenha-a.
-# Por ora, vou comentar, assumindo que o fluxo de 'ja_paguei' é direto.
-# async def solicitar_comprovante(update: Update, context: ContextTypes.DEFAULT_TYPE):
-# query = update.callback_query
-# await query.answer()
-# await query.edit_message_text(
-# "📎 *Aguardando Comprovante*\n\n"
-# "Agora é só me enviar a foto ou screenshot do seu comprovante de pagamento!\n\n"
-# "📸 Pode ser:\n"
-# "• Screenshot da tela de confirmação\n"
-# "• Foto do comprovante\n"
-# "• Print do extrato\n\n"
-# "💕 Estou aguardando aqui para liberar seu acesso ao meu VIP!",
-# parse_mode='Markdown'
-# )
-
 async def receber_comprovante(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     username = update.effective_user.username or "Não informado"
@@ -406,7 +389,7 @@ async def processar_aprovacao(update: Update, context: ContextTypes.DEFAULT_TYPE
                 expire_date=int(time.time()) + (7 * 24 * 60 * 60)
             )
             data_expiracao = datetime.now() + timedelta(days=plano['dias'])
-            username_pagante = "Não recuperado" # Default
+            username_pagante = "Não recuperado" 
             try:
                 chat_user_pagante = await context.bot.get_chat(user_id_pagante)
                 username_pagante = chat_user_pagante.username or "Não informado"
@@ -670,18 +653,19 @@ def keep_alive_ping():
     logger.info(f"Keep-alive auto-ping iniciado para {host_url}.")
     while True:
         try:
-            with urllib.request.urlopen(host_url, timeout=20) as response:
+            with urllib.request.urlopen(host_url, timeout=20) as response: # Aumentei o timeout
                 logger.info(f"Keep-alive ping para {host_url} status {response.status}.")
         except Exception as e:
             logger.error(f"Erro no keep-alive ping para {host_url}: {e}")
-        time.sleep(10 * 60) # A cada 10 minutos (Render free tier tem 15 min de inatividade)
+        # Ajustado para ser mais frequente para testes, mas 5-10 minutos é geralmente bom
+        time.sleep(40) # Ping a cada 40 segundos para teste
 
 class KeepAliveHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header('Content-type', 'text/plain; charset=utf-8')
         self.end_headers()
-        self.wfile.write(b'Bot VIP está ativo e operante!')
+        self.wfile.write('Bot VIP está ativo e operante!'.encode('utf-8')) # CORRIGIDO AQUI
         logger.info(f"KeepAliveHandler: Requisição GET recebida de {self.client_address}, respondendo OK.")
 
 def start_keep_alive_server():
@@ -710,7 +694,6 @@ def main():
     application.add_handler(CallbackQueryHandler(gerar_pix, pattern="^gerar_pix_"))
     application.add_handler(CallbackQueryHandler(copiar_pix, pattern="^copiar_pix_"))
     application.add_handler(CallbackQueryHandler(ja_paguei, pattern="^ja_paguei_"))
-    # Se o botão "Enviar Comprovante" que chama "solicitar_comprovante" ainda for usado, descomente:
     # application.add_handler(CallbackQueryHandler(solicitar_comprovante, pattern="^enviar_comprovante$"))
     application.add_handler(CallbackQueryHandler(processar_aprovacao, pattern="^(aprovar|rejeitar)_"))
     
@@ -718,7 +701,7 @@ def main():
     application.add_handler(ChatMemberHandler(verificar_novo_membro, ChatMemberHandler.CHAT_MEMBER))
     
     job_queue = application.job_queue
-    job_queue.run_repeating(remover_usuarios_expirados_job, interval=3600, first=60) # Verifica a cada hora, 1 min após iniciar
+    job_queue.run_repeating(remover_usuarios_expirados_job, interval=3600, first=60) 
     
     if os.environ.get('RENDER'):
         logger.info("Ambiente RENDER detectado. Iniciando threads de keep-alive.")
@@ -728,35 +711,21 @@ def main():
             keep_alive_ping_thread = threading.Thread(target=keep_alive_ping, daemon=True)
             keep_alive_ping_thread.start()
         else:
-            logger.warning("RENDER_EXTERNAL_URL não definida, auto-ping não será iniciado. O servidor HTTP ainda estará ativo.")
+            logger.warning("RENDER_EXTERNAL_URL não definida, auto-ping não será iniciado.")
     else:
-        logger.info("Ambiente não RENDER ou RENDER não especificado. Threads de keep-alive não iniciadas.")
+        logger.info("Ambiente não RENDER. Threads de keep-alive não iniciadas.")
             
     return application
 
 async def pre_run_bot_setup(application: Application):
-    """Operações a serem executadas antes de iniciar o polling."""
     logger.info("Executando setup de pré-inicialização do bot...")
     
-    # Adicionar um error handler global
     async def error_handler_callback(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.error(msg="Exceção durante o processamento de um update:", exc_info=context.error)
         if isinstance(context.error, telegram.error.Conflict):
             logger.critical(
-                "CONFLITO TELEGRAM DETECTADO DURANTE OPERAÇÃO. Outra instância do bot provavelmente está rodando. "
-                "Esta instância pode não funcionar corretamente."
+                "CONFLITO TELEGRAM DURANTE OPERAÇÃO. Outra instância do bot provavelmente está rodando."
             )
-        # Considerar notificar ADMIN_ID sobre erros críticos, se necessário
-        # e se o erro não for um NetworkError comum em reinícios.
-        # try:
-        #     if not isinstance(context.error, telegram.error.NetworkError): # Evitar spam em problemas de rede
-        #         tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
-        #         tb_string = "".join(tb_list)
-        #         error_message = f"Erro no bot:\n<pre>{html.escape(str(context.error))}</pre>\n\nTraceback:\n<pre>{html.escape(tb_string[-2000:])}</pre>"
-        #         await context.bot.send_message(chat_id=ADMIN_ID, text=error_message, parse_mode=ParseMode.HTML)
-        # except Exception as e_notify:
-        #     logger.error(f"Falha ao notificar admin sobre erro: {e_notify}")
-
     application.add_error_handler(error_handler_callback)
     logger.info("Error handler global adicionado.")
 
@@ -765,8 +734,7 @@ async def pre_run_bot_setup(application: Application):
         if await application.bot.delete_webhook(drop_pending_updates=True):
             logger.info("Webhook deletado com sucesso e updates pendentes limpos.")
         else:
-            # Isso é normal se nenhum webhook estava configurado.
-            logger.info("Comando delete_webhook executado, retornou False (provavelmente nenhum webhook estava configurado).")
+            logger.info("Comando delete_webhook executado, retornou False (nenhum webhook configurado).")
     except telegram.error.RetryAfter as e:
         logger.warning(f"RetryAfter ao deletar webhook: {e}. Tentando novamente em {e.retry_after}s.")
         await asyncio.sleep(e.retry_after)
@@ -780,14 +748,7 @@ async def pre_run_bot_setup(application: Application):
     
     logger.info("Setup de pré-inicialização do bot concluído.")
 
-
 if __name__ == '__main__':
-    # Configuração para SQLite ser mais tolerante com múltiplas threads (embora ainda seja melhor evitar)
-    # sqlite3.threadsafety = 3 # Se você tiver problemas com DB locking, pode ser útil, mas use com cautela.
-    # Idealmente, todas as escritas no DB devem ser serializadas ou de uma única thread/processo.
-    # As leituras são geralmente seguras. O JobQueue e os handlers rodam no mesmo event loop asyncio.
-    # As threads de keep-alive não acessam o DB.
-    
     logger.info("Iniciando script principal do bot...")
     try:
         app = main() 
