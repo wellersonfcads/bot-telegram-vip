@@ -85,10 +85,44 @@ def init_db():
     conn.close()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /start com verificação de idade"""
+    """Comando /start com verificação de idade e verificação de VIP existente"""
     user_id = update.effective_user.id
     
-    # Verificação de idade
+    # Verifica se o usuário já tem acesso VIP
+    conn = sqlite3.connect('vip_bot.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM usuarios_vip WHERE user_id = ? AND ativo = 1', (user_id,))
+    usuario_vip = cursor.fetchone()
+    conn.close()
+    
+    if usuario_vip:
+        # Usuário já tem acesso VIP
+        user_id, username, plano, data_entrada, data_expiracao, ativo = usuario_vip
+        plano_info = PLANOS[plano]
+        data_exp = datetime.fromisoformat(data_expiracao)
+        dias_restantes = (data_exp - datetime.now()).days
+        
+        # Cria teclado com opção para continuar o funil mesmo tendo VIP
+        keyboard = [
+            [InlineKeyboardButton("✨ Continuar mesmo assim", callback_data="idade_ok")],
+            [InlineKeyboardButton("💎 Ver meu plano atual", callback_data="ver_planos")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            f"💎 *VOCÊ JÁ TEM ACESSO VIP!* 💎\n\n"
+            f"Oi amor! Você já tem acesso ao meu conteúdo VIP!\n\n"
+            f"📊 *Detalhes do seu plano:*\n"
+            f"• Plano: {plano_info['nome']}\n"
+            f"• Expira em: {data_exp.strftime('%d/%m/%Y')}\n"
+            f"• Dias restantes: {dias_restantes}\n\n"
+            f"Você pode continuar o funil para renovar seu plano ou ver as opções disponíveis.",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        return
+    
+    # Verificação de idade para novos usuários
     keyboard = [
         [InlineKeyboardButton("✅ Sim, tenho 18 anos ou mais", callback_data="idade_ok")],
         [InlineKeyboardButton("❌ Não tenho 18 anos", callback_data="idade_nao")]
@@ -169,7 +203,7 @@ async def enviar_mensagem_vip(context: ContextTypes.DEFAULT_TYPE):
     
     await context.bot.send_message(
         chat_id=chat_id,
-        text="No meu VIP você vai encontrar conteúdos exclusivos que não posto em lugar nenhum... 🔥",
+        text="No meu VIP você vai encontrar conteúdos exclusivos que não posto em lugar nenhum... 🙊",
         parse_mode='Markdown'
     )
     
@@ -193,12 +227,7 @@ async def mostrar_acesso_vip(context: ContextTypes.DEFAULT_TYPE):
     
     await context.bot.send_message(
         chat_id=chat_id,
-        text="💎 *Quer ter acesso a todo meu conteúdo completo no VIP?*\n\n"
-             "No meu grupo VIP você vai ter:\n"
-             "🔥 Minhas fotos e vídeos exclusivos\n"
-             "💕 Conteúdo que não posto em lugar nenhum\n"
-             "🎯 Acesso direto comigo\n"
-             "✨ Surpresas especiais só para meus VIPs",
+        text="Clique em uma das ofertas abaixo, efetue o pagamento e receba o aseu acesso ao meu grupo VIP!",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
@@ -220,7 +249,6 @@ async def mostrar_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "💎 *MEUS PLANOS VIP DISPONÍVEIS*\n\n"
         "Escolhe o plano que mais combina com você, amor:\n\n"
         "✨ Todos os planos incluem acesso completo ao meu conteúdo exclusivo!\n"
-        "🔥 Quanto maior o plano, melhor o custo-benefício!\n\n"
         "Clica no plano desejado:",
         reply_markup=reply_markup,
         parse_mode='Markdown'
@@ -623,6 +651,73 @@ def remover_usuarios_expirados():
     conn.commit()
     conn.close()
 
+async def notificar_usuarios_proximos_vencimento(bot):
+    """Notifica usuários com planos próximos do vencimento"""
+    conn = sqlite3.connect('vip_bot.db')
+    cursor = conn.cursor()
+    
+    # Data atual
+    data_atual = datetime.now()
+    
+    # Busca usuários com planos que vencem em 7, 3 e 1 dias
+    cursor.execute('''
+        SELECT user_id, username, plano, data_expiracao 
+        FROM usuarios_vip 
+        WHERE ativo = 1
+    ''')
+    
+    usuarios = cursor.fetchall()
+    
+    for usuario in usuarios:
+        user_id, username, plano, data_expiracao = usuario
+        data_exp = datetime.fromisoformat(data_expiracao)
+        dias_restantes = (data_exp - data_atual).days
+        
+        # Notifica usuários com 7, 3 ou 1 dia(s) restante(s)
+        if dias_restantes in [7, 3, 1]:
+            try:
+                plano_info = PLANOS[plano]
+                
+                # Mensagem personalizada baseada nos dias restantes
+                if dias_restantes == 7:
+                    mensagem = (
+                        f"⏰ *AVISO DE RENOVAÇÃO* ⏰\n\n"
+                        f"Oi amor! Seu plano VIP ({plano_info['nome']}) vai expirar em 7 dias.\n\n"
+                        f"📅 Data de vencimento: {data_exp.strftime('%d/%m/%Y')}\n\n"
+                        f"Para continuar tendo acesso ao meu conteúdo exclusivo, use o comando /start para renovar seu plano!\n\n"
+                        f"💋 Não quero ficar sem você no meu VIP!"
+                    )
+                elif dias_restantes == 3:
+                    mensagem = (
+                        f"⚠️ *ATENÇÃO: SEU PLANO ESTÁ ACABANDO* ⚠️\n\n"
+                        f"Oi amor! Faltam apenas 3 dias para seu plano VIP ({plano_info['nome']}) expirar.\n\n"
+                        f"📅 Data de vencimento: {data_exp.strftime('%d/%m/%Y')}\n\n"
+                        f"Renove agora mesmo usando o comando /start para não perder acesso ao meu conteúdo exclusivo!\n\n"
+                        f"💕 Quero você sempre comigo!"
+                    )
+                else:  # 1 dia
+                    mensagem = (
+                        f"🚨 *ÚLTIMO DIA DE ACESSO* 🚨\n\n"
+                        f"Oi amor! Seu plano VIP ({plano_info['nome']}) expira AMANHÃ!\n\n"
+                        f"📅 Data de vencimento: {data_exp.strftime('%d/%m/%Y')}\n\n"
+                        f"Essa é sua última chance de renovar! Use o comando /start agora mesmo para não perder acesso.\n\n"
+                        f"❤️ Não quero te perder!"
+                    )
+                
+                # Envia a notificação
+                await bot.send_message(
+                    chat_id=user_id,
+                    text=mensagem,
+                    parse_mode='Markdown'
+                )
+                
+                logger.info(f"Notificação de renovação enviada para usuário {user_id} (dias restantes: {dias_restantes})")
+                
+            except Exception as e:
+                logger.error(f"Erro ao notificar usuário {user_id} sobre vencimento: {e}")
+    
+    conn.close()
+
 def verificacao_automatica():
     """Thread para verificação automática de usuários expirados"""
     while True:
@@ -632,6 +727,17 @@ def verificacao_automatica():
         except Exception as e:
             logger.error(f"Erro na verificação automática: {e}")
             time.sleep(300)  # Aguarda 5 minutos em caso de erro
+
+async def verificar_notificacoes_vencimento(app):
+    """Verifica e notifica usuários com planos próximos do vencimento"""
+    while True:
+        try:
+            await notificar_usuarios_proximos_vencimento(app.bot)
+            # Verifica uma vez por dia
+            await asyncio.sleep(86400)  # 24 horas
+        except Exception as e:
+            logger.error(f"Erro na verificação de notificações de vencimento: {e}")
+            await asyncio.sleep(3600)  # Aguarda 1 hora em caso de erro
 
 async def remover_usuario(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Remove um usuário específico do canal VIP"""
@@ -866,6 +972,9 @@ def main():
     # Inicia thread de keep-alive para fazer auto-ping
     keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
     keep_alive_thread.start()
+    
+    # Inicia a tarefa de verificação de notificações de vencimento
+    asyncio.create_task(verificar_notificacoes_vencimento(application))
     
     # Inicia o bot
     logger.info("Bot iniciado! Pressione Ctrl+C para parar.")
