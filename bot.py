@@ -126,7 +126,7 @@ async def handle_idade(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
         # Aguarda 3 segundos e envia o próximo passo
-        await context.application.job_queue.run_once(
+        context.application.job_queue.run_once(
             enviar_video_apresentacao, 
             3, 
             data={"chat_id": query.message.chat_id, "user_id": user_id}
@@ -162,7 +162,7 @@ async def enviar_video_apresentacao(context: ContextTypes.DEFAULT_TYPE):
         )
     
     # Aguarda 5 segundos e envia a mensagem sobre o VIP
-    await context.application.job_queue.run_once(
+    context.application.job_queue.run_once(
         enviar_mensagem_vip, 
         5, 
         data={"chat_id": chat_id, "user_id": user_id}
@@ -181,7 +181,7 @@ async def enviar_mensagem_vip(context: ContextTypes.DEFAULT_TYPE):
     )
     
     # Aguarda 3 segundos e mostra o botão de acesso VIP
-    await context.application.job_queue.run_once(
+    context.application.job_queue.run_once(
         mostrar_acesso_vip, 
         3, 
         data={"chat_id": chat_id, "user_id": user_id}
