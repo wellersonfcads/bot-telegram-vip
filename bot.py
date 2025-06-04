@@ -4,13 +4,12 @@ import threading
 import time
 from datetime import datetime, timedelta
 import telegram
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, Bot
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ChatMemberHandler, filters, ContextTypes
 import os
 import http.server
 import socketserver
 import urllib.request
-import asyncio
 
 # Configuração de logging
 logging.basicConfig(
@@ -26,9 +25,6 @@ logging.getLogger('httpx').setLevel(logging.WARNING)
 SEU_USER_ID = 6150001511  # Seu user ID do Telegram
 CANAL_VIP_ID = "-1002280243232"  # ID do seu canal VIP
 BOT_TOKEN = "7963030995:AAE8K5RIFJpaOhxLnDxJ4k614wnq4n549AQ"
-
-# ID do vídeo de apresentação
-VIDEO_FILE_ID = "BAACAgEAAyEGAASVt8opAAMHaD-iEtoaQ_BwxO8AAQdFGScwBkMiAAKnDQAC18ABRi-6C5NIW-MXNgQ"
 
 # Links PIX (seus códigos originais)
 LINKS_PIX = {
@@ -120,63 +116,41 @@ async def handle_idade(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_states[user_id] = "idade_verificada"
         
         await query.edit_message_text(
-            "🥰 Bom te ver por aqui...",
+            "🥰 *Bom te ver por aqui...*\n\n"
+            "Que bom que você chegou até mim! "
+            "Estou muito animada para te mostrar tudo que preparei especialmente para você...\n\n"
+            "Vou te enviar um vídeo especial em alguns segundos! 💕",
             parse_mode='Markdown'
         )
         
         # Aguarda 3 segundos e envia o próximo passo
-        context.application.job_queue.run_once(
+        await context.application.job_queue.run_once(
             enviar_video_apresentacao, 
             3, 
             data={"chat_id": query.message.chat_id, "user_id": user_id}
         )
 
 async def enviar_video_apresentacao(context: ContextTypes.DEFAULT_TYPE):
-    """Envia vídeo de apresentação usando um bot separado para o vídeo"""
+    """Envia vídeo de apresentação"""
     job_data = context.job.data
     chat_id = job_data["chat_id"]
     user_id = job_data["user_id"]
     
-    try:
-        # Usando a instância principal do bot para enviar o vídeo
-        await context.bot.send_video(
-            chat_id=chat_id,
-            video=VIDEO_FILE_ID
-        )
-        
-        logger.info(f"Vídeo enviado com sucesso para o usuário {user_id}")
-    except Exception as e:
-        logger.error(f"Erro ao enviar vídeo: {e}")
-        # Envia uma mensagem alternativa em caso de falha
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text="Estou preparando uma surpresa especial para você! 🎁",
-            parse_mode='Markdown'
-        )
-    
-    # Aguarda 5 segundos e envia a mensagem sobre o VIP
-    context.application.job_queue.run_once(
-        enviar_mensagem_vip, 
-        5, 
-        data={"chat_id": chat_id, "user_id": user_id}
-    )
-
-async def enviar_mensagem_vip(context: ContextTypes.DEFAULT_TYPE):
-    """Envia mensagem sobre o VIP"""
-    job_data = context.job.data
-    chat_id = job_data["chat_id"]
-    user_id = job_data["user_id"]
-    
+    # Aqui você colocaria o link do seu vídeo
+    # Por enquanto, vou simular com uma mensagem
     await context.bot.send_message(
         chat_id=chat_id,
-        text="No meu VIP você vai encontrar conteúdos exclusivos que não posto em lugar nenhum... 🙊",
+        text="🎥 *[VÍDEO DE APRESENTAÇÃO]*\n\n"
+             "Oi amor! Sou a Clarinha e estou muito feliz que você chegou até aqui! ✨\n\n"
+             "_[Aqui seria seu vídeo de apresentação]_\n\n"
+             "No meu VIP você vai encontrar conteúdos exclusivos que não posto em lugar nenhum... 🔥",
         parse_mode='Markdown'
     )
     
-    # Aguarda 3 segundos e mostra o botão de acesso VIP
-    context.application.job_queue.run_once(
+    # Aguarda 5 segundos e mostra os planos
+    await context.application.job_queue.run_once(
         mostrar_acesso_vip, 
-        3, 
+        5, 
         data={"chat_id": chat_id, "user_id": user_id}
     )
 
@@ -184,16 +158,21 @@ async def mostrar_acesso_vip(context: ContextTypes.DEFAULT_TYPE):
     """Mostra opção de acesso VIP"""
     job_data = context.job.data
     chat_id = job_data["chat_id"]
-    user_id = job_data["user_id"]
     
     keyboard = [
-        [InlineKeyboardButton("⭐ GRUPO VIP", callback_data="ver_planos")]
+        [InlineKeyboardButton("🔥 QUERO TER ACESSO AO VIP", callback_data="ver_planos")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await context.bot.send_message(
         chat_id=chat_id,
-        text="Clique em uma das ofertas abaixo, efetue o pagamento e receba o aseu acesso ao meu grupo VIP!",
+        text="💎 *Quer ter acesso a todo meu conteúdo completo no VIP?*\n\n"
+             "No meu grupo VIP você vai ter:\n"
+             "🔥 Minhas fotos e vídeos exclusivos\n"
+             "💕 Conteúdo que não posto em lugar nenhum\n"
+             "🎯 Acesso direto comigo\n"
+             "✨ Surpresas especiais só para meus VIPs\n\n"
+             "Clica no botão abaixo para ver os planos disponíveis! 👇",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
@@ -215,6 +194,7 @@ async def mostrar_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "💎 *MEUS PLANOS VIP DISPONÍVEIS*\n\n"
         "Escolhe o plano que mais combina com você, amor:\n\n"
         "✨ Todos os planos incluem acesso completo ao meu conteúdo exclusivo!\n"
+        "🔥 Quanto maior o plano, melhor o custo-benefício!\n\n"
         "Clica no plano desejado:",
         reply_markup=reply_markup,
         parse_mode='Markdown'
@@ -860,43 +840,6 @@ def main():
     # Inicia thread de keep-alive para fazer auto-ping
     keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
     keep_alive_thread.start()
-    
-    # Define a descrição do bot que aparecerá antes do funil iniciar
-    async def set_bot_description():
-        bot = Bot(BOT_TOKEN)
-        # Define a descrição do bot
-        await bot.set_my_description(
-            "Seja bem-vindo ao meu Canal VIP 🔥\n\n"
-            "🌶 Interação com os assinantes\n"
-            "🌶 Fotos/Vídeos Exclusivos\n"
-            "🌶 Contos Eróticos\n"
-            "🌶 Lives e Sorteios\n\n"
-            "Para ter acesso, clique em /start agora mesmo!"
-        )
-        
-        # Define comandos apenas para o administrador (você) e oculta para usuários normais
-        from telegram.ext import BotCommandScopeChat
-        
-        # Lista de comandos disponíveis apenas para o administrador
-        admin_commands = [
-            ("start", "Iniciar o bot"),
-            ("usuarios", "Listar usuários VIP"),
-            ("remover", "Remover um usuário do VIP")
-        ]
-        
-        # Remove comandos do menu para todos os usuários (oculta o menu)
-        await bot.delete_my_commands()
-        
-        # Adiciona comandos apenas para o administrador
-        await bot.set_my_commands(
-            commands=admin_commands,
-            scope=BotCommandScopeChat(chat_id=SEU_USER_ID)
-        )
-        
-        await bot.close()
-    
-    # Executa a função para definir a descrição do bot
-    asyncio.run(set_bot_description())
     
     # Inicia o bot
     logger.info("Bot iniciado! Pressione Ctrl+C para parar.")
