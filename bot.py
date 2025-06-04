@@ -119,7 +119,7 @@ async def handle_idade(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🥰 *Bom te ver por aqui...*\n\n"
             "Que bom que você chegou até mim! "
             "Estou muito animada para te mostrar tudo que preparei especialmente para você...\n\n"
-            "Vou te enviar um vídeo especial em alguns segundos! �",
+            "Vou te enviar um vídeo especial em alguns segundos! 💕",
             parse_mode='Markdown'
         )
         
@@ -170,7 +170,7 @@ async def mostrar_acesso_vip(context: ContextTypes.DEFAULT_TYPE):
              "No meu grupo VIP você vai ter:\n"
              "🔥 Minhas fotos e vídeos exclusivos\n"
              "💕 Conteúdo que não posto em lugar nenhum\n"
-             "� Acesso direto comigo\n"
+             "🎯 Acesso direto comigo\n"
              "✨ Surpresas especiais só para meus VIPs\n\n"
              "Clica no botão abaixo para ver os planos disponíveis! 👇",
         reply_markup=reply_markup,
@@ -797,32 +797,6 @@ def start_keep_alive_server():
         logger.info(f"Servidor keep-alive iniciado na porta {port}")
         httpd.serve_forever()
 
-async def configurar_bot(application): 
-    """Configura as informações do bot""" 
-    try: 
-        # Define a descrição do bot 
-        await application.bot.set_my_description( 
-            description="Seja bem-vindo ao meu Canal VIP 🔥\n" 
-                       "🌶 Interação com os assinantes\n" 
-                       "🌶 Fotos/Vídeos Exclusivos\n" 
-                       "🌶 Contos Eróticos\n" 
-                       "🌶 Lives e Sorteios\n" 
-                       "Para ter acesso, clique em /start agora mesmo!" 
-        ) 
-        
-        # Define o nome do bot (opcional) 
-        await application.bot.set_my_name("Canal VIP Bot") 
-        
-        # Define a descrição curta (aparece na lista de bots) 
-        await application.bot.set_my_short_description( 
-            "🔥 Acesso ao meu conteúdo VIP exclusivo!" 
-        ) 
-        
-        logger.info("Configurações do bot atualizadas com sucesso!") 
-        
-    except Exception as e: 
-        logger.error(f"Erro ao configurar bot: {e}")
-
 def main():
     """Função principal do bot"""
     # Inicializa o banco de dados
@@ -830,11 +804,6 @@ def main():
     
     # Cria a aplicação com configurações para evitar conflitos
     application = Application.builder().token(BOT_TOKEN).build()
-    
-    # ADICIONE ESTAS LINHAS AQUI: 
-    # Configura as informações do bot 
-    import asyncio 
-    asyncio.create_task(configurar_bot(application))
     
     # Handlers
     application.add_handler(CommandHandler("start", start))
