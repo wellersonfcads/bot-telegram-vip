@@ -4,13 +4,13 @@ import threading
 import time
 from datetime import datetime, timedelta
 import telegram
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, constants as TGConstants # Adicionado para ChatMemberStatus
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ChatMemberHandler, filters, ContextTypes
 import os
 import http.server
 import socketserver
 import urllib.request
-import asyncio # NECESSÁRIO PARA A CORREÇÃO DO CONFLITO
+import asyncio
 
 # Configuração de logging
 logging.basicConfig(
@@ -66,35 +66,27 @@ user_states = {}
 
 def init_db():
     """Inicializa o banco de dados"""
-    conn = sqlite3.connect('vip_bot.db', timeout=10)
-    cursor = conn.cursor()
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS usuarios_vip (
-            user_id INTEGER PRIMARY KEY,
-            username TEXT,
-            plano TEXT,
-            data_entrada TEXT,
-            data_expiracao TEXT,
-            ativo INTEGER DEFAULT 1
-        )
-    ''')
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS pagamentos_pendentes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            username TEXT,
-            plano TEXT,
-            valor TEXT,
-            data_solicitacao TEXT,
-            comprovante_enviado INTEGER DEFAULT 0,
-            aprovado INTEGER DEFAULT 0
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
+    with sqlite3.connect('vip_bot.db', timeout=10) as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS usuarios_vip (
+                user_id INTEGER PRIMARY KEY, username TEXT, plano TEXT,
+                data_entrada TEXT, data_expiracao TEXT, ativo INTEGER DEFAULT 1
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS pagamentos_pendentes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, username TEXT,
+                plano TEXT, valor TEXT, data_solicitacao TEXT,
+                comprovante_enviado INTEGER DEFAULT 0, aprovado INTEGER DEFAULT 0
+            )
+        ''')
+        conn.commit()
+
+# ... (TODAS AS SUAS FUNÇÕES DE HANDLER async def start, handle_idade, etc., permanecem IGUAIS ATÉ remover_usuario_nao_autorizado) ...
+# Cole todas as suas funções de bot (start, handle_idade, ..., verificar_novo_membro) aqui, sem alterá-las.
+# Para economizar espaço, não vou repeti-las, mas elas devem estar aqui no seu código.
+# Vou pular para keep_alive_ping e as funções de configuração e execução.
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -624,6 +616,10 @@ async def remover_usuario_nao_autorizado(user_id_remover, bot_instance: telegram
         )
         return True
     except telegram.error.TelegramError as te:
+        # Adicionar verificação para "user is a bot" pode ser útil se você testar com bots
+        if "user_is_bot" in str(te).lower():
+            logger.warning(f"Tentativa de remover bot {user_id_remover} do canal. Ignorando. Erro: {te}")
+            return False 
         logger.error(f"Erro Telegram ao remover não autorizado {user_id_remover}: {te}")
     except Exception as e:
         logger.error(f"Erro geral ao remover não autorizado {user_id_remover}: {e}", exc_info=True)
@@ -632,9 +628,10 @@ async def remover_usuario_nao_autorizado(user_id_remover, bot_instance: telegram
 async def verificar_novo_membro(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.chat_member or str(update.chat_member.chat.id) != str(CANAL_VIP_ID):
         return
+    # Usar telegram.constants.ChatMemberStatus para os status
     new_member_status = update.chat_member.new_chat_member.status
     user = update.chat_member.new_chat_member.user
-    if new_member_status in [telegram.constants.ChatMemberStatus.MEMBER, telegram.constants.ChatMemberStatus.RESTRICTED]:
+    if new_member_status in [TGConstants.ChatMemberStatus.MEMBER, TGConstants.ChatMemberStatus.RESTRICTED]:
         user_id_novo = user.id
         if user_id_novo == ADMIN_ID or user_id_novo == context.bot.id:
             return
@@ -645,28 +642,36 @@ async def verificar_novo_membro(update: Update, context: ContextTypes.DEFAULT_TY
         else:
             logger.info(f"AUTORIZADO: {user_id_novo} (@{user.username or 'N/A'}) no VIP {CANAL_VIP_ID}.")
 
+# --- Funções de Keep-Alive ---
 def keep_alive_ping():
     host_url = os.environ.get('RENDER_EXTERNAL_URL')
     if not host_url:
         logger.info("RENDER_EXTERNAL_URL não definida. Auto-ping desativado.")
         return
+    
+    # Dá um tempo para o servidor HTTP iniciar antes do primeiro ping
+    time.sleep(30) # Espera 30 segundos antes de iniciar os pings
     logger.info(f"Keep-alive auto-ping iniciado para {host_url}.")
+
     while True:
         try:
-            with urllib.request.urlopen(host_url, timeout=20) as response: # Aumentei o timeout
+            with urllib.request.urlopen(host_url, timeout=25) as response: # Timeout aumentado
                 logger.info(f"Keep-alive ping para {host_url} status {response.status}.")
         except Exception as e:
             logger.error(f"Erro no keep-alive ping para {host_url}: {e}")
-        # Ajustado para ser mais frequente para testes, mas 5-10 minutos é geralmente bom
-        time.sleep(40) # Ping a cada 40 segundos para teste
+        # O Render desliga Web Services no plano gratuito após 15 minutos de inatividade de requisições EXTERNAS.
+        # Pingar a cada 5-14 minutos com um serviço EXTERNO (ex: UptimeRobot) é o ideal.
+        # Este auto-ping interno ajuda a manter o PROCESSO ativo, mas não garante que o Render não durma.
+        # No entanto, para testar o spin-down, vamos usar um intervalo mais curto aqui
+        time.sleep(40) # Alterado para 40 segundos para teste agressivo de spin-down. Para produção, 5-10 minutos seria melhor.
 
 class KeepAliveHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header('Content-type', 'text/plain; charset=utf-8')
         self.end_headers()
-        self.wfile.write('Bot VIP está ativo e operante!'.encode('utf-8')) # CORRIGIDO AQUI
-        logger.info(f"KeepAliveHandler: Requisição GET recebida de {self.client_address}, respondendo OK.")
+        self.wfile.write('Bot VIP está ativo e operante!'.encode('utf-8')) # CORRIGIDO
+        logger.debug(f"KeepAliveHandler: Requisição GET de {self.client_address}, respondendo OK.") # Mudado para DEBUG
 
 def start_keep_alive_server():
     port = int(os.environ.get('PORT', 8080))
@@ -680,45 +685,57 @@ def start_keep_alive_server():
     except Exception as e:
         logger.critical(f"Exceção não esperada ao iniciar servidor keep-alive: {e}", exc_info=True)
 
-def main():
-    init_db()
+# --- Funções Principais de Configuração e Execução do Bot ---
+def configure_application():
+    """Configura e retorna o objeto Application do bot."""
+    init_db() # Inicializa o banco de dados primeiro
+    
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
+    # Handlers de Comando
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("usuarios", listar_usuarios))
     application.add_handler(CommandHandler("remover", remover_usuario))
     
+    # Handlers de CallbackQuery
     application.add_handler(CallbackQueryHandler(handle_idade, pattern="^idade_"))
     application.add_handler(CallbackQueryHandler(mostrar_planos, pattern="^ver_planos$"))
     application.add_handler(CallbackQueryHandler(detalhes_plano, pattern="^plano_"))
     application.add_handler(CallbackQueryHandler(gerar_pix, pattern="^gerar_pix_"))
     application.add_handler(CallbackQueryHandler(copiar_pix, pattern="^copiar_pix_"))
     application.add_handler(CallbackQueryHandler(ja_paguei, pattern="^ja_paguei_"))
-    # application.add_handler(CallbackQueryHandler(solicitar_comprovante, pattern="^enviar_comprovante$"))
+    # application.add_handler(CallbackQueryHandler(solicitar_comprovante, pattern="^enviar_comprovante$")) # Comentado
     application.add_handler(CallbackQueryHandler(processar_aprovacao, pattern="^(aprovar|rejeitar)_"))
     
+    # Handler para receber comprovantes
     application.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, receber_comprovante))
+    
+    # Handler para verificar novos membros no canal
     application.add_handler(ChatMemberHandler(verificar_novo_membro, ChatMemberHandler.CHAT_MEMBER))
     
+    # JobQueue para tarefas agendadas
     job_queue = application.job_queue
-    job_queue.run_repeating(remover_usuarios_expirados_job, interval=3600, first=60) 
+    job_queue.run_repeating(remover_usuarios_expirados_job, interval=3600, first=60) # A cada hora, 1 min após iniciar
     
+    # Inicia threads de keep-alive se estiver no Render
     if os.environ.get('RENDER'):
         logger.info("Ambiente RENDER detectado. Iniciando threads de keep-alive.")
         server_thread = threading.Thread(target=start_keep_alive_server, daemon=True)
         server_thread.start()
+        
         if os.environ.get('RENDER_EXTERNAL_URL'):
-            keep_alive_ping_thread = threading.Thread(target=keep_alive_ping, daemon=True)
-            keep_alive_ping_thread.start()
+            ping_thread = threading.Thread(target=keep_alive_ping, daemon=True)
+            ping_thread.start()
         else:
-            logger.warning("RENDER_EXTERNAL_URL não definida, auto-ping não será iniciado.")
+            logger.warning("RENDER_EXTERNAL_URL não definida, auto-ping não será iniciado. Servidor HTTP ainda ativo.")
     else:
-        logger.info("Ambiente não RENDER. Threads de keep-alive não iniciadas.")
+        logger.info("Ambiente não RENDER ou RENDER não especificado. Threads de keep-alive não iniciadas.")
             
     return application
 
-async def pre_run_bot_setup(application: Application):
-    logger.info("Executando setup de pré-inicialização do bot...")
+async def pre_run_bot_operations(application: Application):
+    """Operações assíncronas a serem executadas antes do bot iniciar o polling."""
+    logger.info("Executando operações de pré-inicialização do bot (async)...")
     
     async def error_handler_callback(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.error(msg="Exceção durante o processamento de um update:", exc_info=context.error)
@@ -727,44 +744,82 @@ async def pre_run_bot_setup(application: Application):
                 "CONFLITO TELEGRAM DURANTE OPERAÇÃO. Outra instância do bot provavelmente está rodando."
             )
     application.add_error_handler(error_handler_callback)
-    logger.info("Error handler global adicionado.")
+    logger.info("Error handler global adicionado à aplicação.")
 
     try:
-        logger.info("Tentando deletar qualquer webhook existente e limpar updates pendentes...")
+        logger.info("Tentando deletar webhook e limpar updates pendentes...")
         if await application.bot.delete_webhook(drop_pending_updates=True):
-            logger.info("Webhook deletado com sucesso e updates pendentes limpos.")
+            logger.info("Webhook deletado/limpo com sucesso.")
         else:
-            logger.info("Comando delete_webhook executado, retornou False (nenhum webhook configurado).")
+            logger.info("delete_webhook retornou False (normal se nenhum webhook estava setado).")
     except telegram.error.RetryAfter as e:
-        logger.warning(f"RetryAfter ao deletar webhook: {e}. Tentando novamente em {e.retry_after}s.")
+        logger.warning(f"RetryAfter ao deletar webhook: {e}. Aguardando {e.retry_after}s e tentando novamente.")
         await asyncio.sleep(e.retry_after)
         try:
             if await application.bot.delete_webhook(drop_pending_updates=True):
-                logger.info("Webhook deletado com sucesso na segunda tentativa.")
+                logger.info("Webhook deletado/limpo com sucesso na segunda tentativa.")
         except Exception as e2:
-            logger.error(f"Erro na segunda tentativa de delete_webhook: {e2}")
+            logger.error(f"Erro na segunda tentativa de delete_webhook: {e2}", exc_info=True)
     except Exception as e:
-        logger.error(f"Erro durante delete_webhook na pré-inicialização: {e}", exc_info=True)
+        logger.error(f"Erro inesperado durante delete_webhook: {e}", exc_info=True)
     
-    logger.info("Setup de pré-inicialização do bot concluído.")
+    logger.info("Operações de pré-inicialização do bot (async) concluídas.")
 
-if __name__ == '__main__':
-    logger.info("Iniciando script principal do bot...")
+async def run_bot_async():
+    """Função principal assíncrona para configurar e rodar o bot."""
+    logger.info("Configurando a aplicação do bot...")
+    application = configure_application() # Chamada síncrona para configurar
+
+    await pre_run_bot_operations(application) # Executa operações async antes de rodar
+
+    logger.info("Inicializando componentes da aplicação...")
     try:
-        app = main() 
-        
-        asyncio.run(pre_run_bot_setup(app))
-
-        logger.info("Iniciando polling para updates do Telegram...")
-        app.run_polling(
-            drop_pending_updates=True, 
+        await application.initialize()      # Prepara handlers, etc.
+        logger.info("Iniciando polling de updates do Telegram...")
+        await application.updater.start_polling(
+            drop_pending_updates=True, # Embora delete_webhook já possa ter feito isso
             allowed_updates=Update.ALL_TYPES 
         )
-    except telegram.error.Conflict as e_conflict:
-        logger.critical(f"CONFLITO TELEGRAM NA INICIALIZAÇÃO PRINCIPAL: {e_conflict}. Certifique-se que apenas UMA instância do bot está rodando com este token.")
-    except KeyboardInterrupt:
-        logger.info("Bot encerrado manualmente (KeyboardInterrupt).")
-    except Exception as e_fatal:
-        logger.critical(f"Erro fatal ao iniciar ou executar o bot: {e_fatal}", exc_info=True)
+        logger.info("Iniciando o dispatcher para processar updates...")
+        await application.start()           # Começa a processar updates
+        
+        logger.info(f"Bot {application.bot.username} iniciado e rodando! Aguardando por interrupção (Ctrl+C)...")
+        await application.updater.idle()    # Mantém o bot rodando
+        
+    except Exception as e: # Captura exceções durante o ciclo de vida do polling/start
+        logger.critical(f"Erro crítico durante a execução do bot (polling/start): {e}", exc_info=True)
+        # Tenta um shutdown gracioso mesmo em caso de erro no polling
     finally:
-        logger.info("Script principal do bot finalizado.")
+        logger.info("Iniciando processo de shutdown do bot...")
+        if application.running:
+            logger.info("Parando o dispatcher de updates...")
+            await application.stop()
+        if application.updater and application.updater.running: # Checa se updater existe e está rodando
+            logger.info("Parando o polling de updates...")
+            await application.updater.stop()
+        logger.info("Realizando shutdown da aplicação...")
+        await application.shutdown() # Limpeza final de recursos da aplicação
+        logger.info("Shutdown do bot concluído.")
+
+
+if __name__ == '__main__':
+    logger.info("========================================")
+    logger.info("=== INICIANDO SCRIPT PRINCIPAL DO BOT ===")
+    logger.info("========================================")
+    try:
+        asyncio.run(run_bot_async())
+    except KeyboardInterrupt:
+        logger.info("Bot encerrado manualmente via KeyboardInterrupt.")
+    except telegram.error.Conflict as e_conflict:
+        logger.critical(f"CONFLITO TELEGRAM NA INICIALIZAÇÃO GERAL: {e_conflict}. Certifique-se que apenas UMA instância está rodando.")
+    except RuntimeError as e_runtime:
+        if "no current event loop" in str(e_runtime).lower():
+            logger.critical(f"RUNTIME ERROR - NO CURRENT EVENT LOOP: {e_runtime}. Problema com gerenciamento do loop asyncio.")
+        else:
+            logger.critical(f"Erro fatal (RuntimeError) ao executar o bot: {e_runtime}", exc_info=True)
+    except Exception as e_fatal:
+        logger.critical(f"Erro fatal geral não capturado ao executar o bot: {e_fatal}", exc_info=True)
+    finally:
+        logger.info("========================================")
+        logger.info("=== SCRIPT PRINCIPAL DO BOT FINALIZADO ===")
+        logger.info("========================================")
