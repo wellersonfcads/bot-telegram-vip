@@ -136,7 +136,7 @@ async def enviar_video_apresentacao(context: ContextTypes.DEFAULT_TYPE):
     # Enviando o vídeo usando o file_id fornecido
     await context.bot.send_video(
         chat_id=chat_id,
-        video="BAACAgEAAxkBAAMCaD-U8oLkcSeOdb86LIiCmECDw8MAAg4HAAKAlQABRvU8vUAa8xsjNgQ"
+        video="BAACAgEAAyEGAASVt8opAAMHaD-iEtoaQ_BwxO8AAQdFGScwBkMiAAKnDQAC18ABRi-6C5NIW-MXNgQ"
     )
     
     # Aguarda 5 segundos e envia a mensagem sobre o VIP
