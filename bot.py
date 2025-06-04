@@ -777,27 +777,36 @@ async def run_bot_async():
         await application.initialize()      # Prepara handlers, etc.
         logger.info("Iniciando polling de updates do Telegram...")
         await application.updater.start_polling(
-            drop_pending_updates=True, # Embora delete_webhook já possa ter feito isso
+            drop_pending_updates=True, 
             allowed_updates=Update.ALL_TYPES 
         )
         logger.info("Iniciando o dispatcher para processar updates...")
         await application.start()           # Começa a processar updates
         
-        logger.info(f"Bot {application.bot.username} iniciado e rodando! Aguardando por interrupção (Ctrl+C)...")
-        await application.updater.idle()    # Mantém o bot rodando
+        bot_username = application.bot.username if application.bot else "N/A (bot não totalmente inicializado)"
+        logger.info(f"Bot {bot_username} iniciado e rodando! Aguardando por interrupção (Ctrl+C ou sinal de parada)...")
         
-    except Exception as e: # Captura exceções durante o ciclo de vida do polling/start
+        # Mantém a função principal 'run_bot_async' rodando enquanto o updater estiver ativo.
+        # O asyncio.run() no __main__ cuidará de manter o loop de eventos ativo.
+        # Uma forma de esperar indefinidamente até que uma exceção (como KeyboardInterrupt) ocorra:
+        while True:
+            await asyncio.sleep(3600) # Dorme por 1 hora, ou até ser interrompido.
+            # Este sono é apenas para manter a corrotina 'run_bot_async' viva.
+            # As tarefas do bot (polling, jobs) rodam independentemente no loop de eventos.
+
+    except (KeyboardInterrupt, SystemExit): # Captura KeyboardInterrupt e SystemExit para shutdown gracioso
+        logger.info("Sinal de interrupção recebido, iniciando shutdown gracioso...")
+    except Exception as e: 
         logger.critical(f"Erro crítico durante a execução do bot (polling/start): {e}", exc_info=True)
-        # Tenta um shutdown gracioso mesmo em caso de erro no polling
     finally:
         logger.info("Iniciando processo de shutdown do bot...")
-        if application.running:
-            logger.info("Parando o dispatcher de updates...")
+        if application.running: # Checa se application está rodando antes de chamar stop
+            logger.info("Parando o dispatcher de updates (application.stop())...")
             await application.stop()
-        if application.updater and application.updater.running: # Checa se updater existe e está rodando
-            logger.info("Parando o polling de updates...")
+        if application.updater and application.updater.is_running: # Checa se updater existe e está rodando
+            logger.info("Parando o polling de updates (application.updater.stop())...")
             await application.updater.stop()
-        logger.info("Realizando shutdown da aplicação...")
+        logger.info("Realizando shutdown da aplicação (application.shutdown())...")
         await application.shutdown() # Limpeza final de recursos da aplicação
         logger.info("Shutdown do bot concluído.")
 
@@ -808,8 +817,10 @@ if __name__ == '__main__':
     logger.info("========================================")
     try:
         asyncio.run(run_bot_async())
-    except KeyboardInterrupt:
-        logger.info("Bot encerrado manualmente via KeyboardInterrupt.")
+    # KeyboardInterrupt será pego dentro de run_bot_async agora para o shutdown gracioso.
+    # No entanto, se ocorrer antes do loop principal de run_bot_async, pode ser pego aqui.
+    except KeyboardInterrupt: 
+        logger.info("Bot encerrado manualmente via KeyboardInterrupt (nível principal).")
     except telegram.error.Conflict as e_conflict:
         logger.critical(f"CONFLITO TELEGRAM NA INICIALIZAÇÃO GERAL: {e_conflict}. Certifique-se que apenas UMA instância está rodando.")
     except RuntimeError as e_runtime:
