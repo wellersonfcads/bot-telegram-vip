@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, constants as TGConstants
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ChatMemberHandler, filters, ContextTypes, Job # Job importado
-from telegram.constants import ParseMode 
+from telegram.constants import ParseMode # Corrigido: removido espaço extra
 import os
 import http.server
 import socketserver
@@ -97,11 +97,13 @@ def remover_jobs_lembrete_anteriores(user_id: int, context: ContextTypes.DEFAULT
             logger.info(f"Removendo {len(current_jobs)} jobs de lembrete pendentes para user {user_id}.")
             for job_obj in current_jobs: 
                 if job_obj and isinstance(job_obj, Job): 
-                    job_obj.schedule_removal()
+                    try:
+                        job_obj.schedule_removal()
+                    except Exception as e_remove: # Adicionado para capturar erro ao remover job
+                        logger.error(f"Erro ao tentar remover job {job_obj.name}: {e_remove}")
             user_states[user_id]['pending_reminder_jobs'] = [] 
     elif user_id in user_states:
         logger.warning(f"Estrutura de user_states[{user_id}] inesperada ao tentar remover jobs: {user_states[user_id]}")
-
 
 async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
@@ -160,6 +162,8 @@ async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
     elif estado_esperado_no_job.startswith("visualizando_detalhes_"):
         if plano_key_lembrete and plano_key_lembrete in PLANOS:
             plano_nome = PLANOS[plano_key_lembrete]['nome']
+            # Não precisa escapar plano_nome aqui, pois ele é usado no texto do botão que não usa Markdown.
+            # E na mensagem, plano_nome_escapado é usado.
             plano_nome_escapado = escape_markdown_v2(plano_nome)
             if delay == "1min":
                 mensagem = f"Percebi que você curtiu o *{plano_nome_escapado}*, hein? 😉 Ele é incrível mesmo\\! Que tal gerar o PIX agora e garantir seu lugarzinho no céu? 🔞"
@@ -186,8 +190,10 @@ async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
                 parse_mode=ParseMode.MARKDOWN_V2
             )
             logger.info(f"Lembrete {delay} enviado para user {user_id} no contexto '{estado_esperado_no_job}'.")
+        except telegram.error.BadRequest as br_err:
+            logger.error(f"BadRequest ao enviar lembrete {delay} para user {user_id} (chat {chat_id}): {br_err}. Mensagem: '{mensagem}'", exc_info=True)
         except Exception as e:
-            logger.error(f"Erro ao enviar lembrete {delay} para user {user_id}: {e}", exc_info=True)
+            logger.error(f"Erro geral ao enviar lembrete {delay} para user {user_id}: {e}", exc_info=True)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -215,8 +221,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     job_context_name_base = f"{JOB_LEMBRETE_IDADE_PREFIX}{user_id}"
     
-    # ATENÇÃO: Delays de produção. Mude para valores menores para TESTE rápido (ex: 10, 20, 30).
-    delays_lembrete = {"1min_idade": 1*60, "5min_idade": 5*60, "10min_idade": 10*60} 
+    # ATENÇÃO: Delays para PRODUÇÃO. Mude para valores menores para TESTE rápido (ex: 10, 20, 30).
+    # delays_lembrete = {"1min_idade": 10, "5min_idade": 20, "10min_idade": 30} # TESTE 
+    delays_lembrete = {"1min_idade": 1*60, "5min_idade": 5*60, "10min_idade": 10*60} # PRODUÇÃO
 
     jobs_agendados = []
     for delay_tag, delay_seconds in delays_lembrete.items():
@@ -239,30 +246,53 @@ async def handle_idade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
     chat_id = query.message.chat_id 
-    await query.answer()
+    
+    # Log detalhado no início do handler
+    logger.info(f"[HANDLE_IDADE] Triggered. User: {user_id}, Data: {query.data}, Message ID: {query.message.message_id if query.message else 'N/A'}")
+    logger.info(f"[HANDLE_IDADE] User state ANTES de remover jobs: {user_states.get(user_id)}")
+
+    await query.answer() # Responde ao callback o mais rápido possível
     
     remover_jobs_lembrete_anteriores(user_id, context)
+    logger.info(f"[HANDLE_IDADE] User state DEPOIS de remover jobs: {user_states.get(user_id)}")
     
     if query.data == "idade_nao":
         texto_idade_nao = (
             "❌ Desculpe amor, meu conteúdo é apenas para maiores de 18 anos\\.\n\n"
             "Volte quando completar 18 anos\\! 😊"
         )
-        await query.edit_message_text(
-            texto_idade_nao, 
-            parse_mode=ParseMode.MARKDOWN_V2 
-        )
+        try:
+            await query.edit_message_text(
+                texto_idade_nao, 
+                parse_mode=ParseMode.MARKDOWN_V2 
+            )
+        except telegram.error.BadRequest as e:
+            if "message is not modified" in str(e).lower():
+                logger.warning(f"Mensagem de idade_nao não modificada para user {user_id}: {e}")
+            else:
+                raise # Re-levanta outras BadRequests
         user_states[user_id] = {"state": "idade_recusada", "pending_reminder_jobs": []} 
+        logger.info(f"[HANDLE_IDADE] User {user_id} selecionou 'idade_nao'. Estado: {user_states[user_id]['state']}")
         return
     
     if query.data == "idade_ok":
         user_states[user_id] = {"state": "idade_ok_proximo_passo", "pending_reminder_jobs": []}
+        logger.info(f"[HANDLE_IDADE] User {user_id} selecionou 'idade_ok'. Novo estado: {user_states[user_id]['state']}")
         
         texto_boas_vindas = "🥰 Bom te ver por aqui\\.\\.\\."
-        await query.edit_message_text( 
-            texto_boas_vindas,
-            parse_mode=ParseMode.MARKDOWN_V2
-        )
+        try:
+            await query.edit_message_text( 
+                texto_boas_vindas,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+        except telegram.error.BadRequest as e:
+            if "message is not modified" in str(e).lower():
+                logger.warning(f"Mensagem de boas_vindas não modificada para user {user_id}: {e}")
+            else:
+                logger.error(f"Erro ao editar mensagem de boas_vindas para user {user_id}: {e}", exc_info=True)
+                # Não prosseguir se a edição da mensagem falhar, a menos que seja "not modified"
+                if not ("message is not modified" in str(e).lower()):
+                    return 
         
         context.application.job_queue.run_once(
             enviar_convite_vip_inicial, 
@@ -276,8 +306,13 @@ async def enviar_convite_vip_inicial(context: ContextTypes.DEFAULT_TYPE):
     chat_id = job_data["chat_id"]
     user_id = job_data["user_id"]
 
-    if user_states.get(user_id, {}).get("state") != "idade_ok_proximo_passo":
-        logger.info(f"Envio do convite VIP inicial para user {user_id} cancelado (estado mudou).")
+    current_user_state_info = user_states.get(user_id, {})
+    current_actual_state = current_user_state_info.get("state")
+    logger.info(f"Job enviar_convite_vip_inicial para user {user_id}. Estado atual: {current_actual_state}")
+
+
+    if current_actual_state != "idade_ok_proximo_passo":
+        logger.info(f"Envio do convite VIP inicial para user {user_id} cancelado (estado mudou de 'idade_ok_proximo_passo' para '{current_actual_state}').")
         return
 
     texto_segunda_msg = "No meu VIP você vai encontrar conteúdos exclusivos que não posto em lugar nenhum\\.\\.\\. 🙊"
@@ -287,26 +322,36 @@ async def enviar_convite_vip_inicial(context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup_vip = InlineKeyboardMarkup(keyboard_vip)
 
-    await context.bot.send_message( 
-        chat_id=chat_id,
-        text=texto_segunda_msg, 
-        reply_markup=reply_markup_vip,
-        parse_mode=ParseMode.MARKDOWN_V2
-    )
+    try:
+        await context.bot.send_message( 
+            chat_id=chat_id,
+            text=texto_segunda_msg, 
+            reply_markup=reply_markup_vip,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        logger.info(f"Convite VIP inicial enviado para user {user_id}")
+    except Exception as e:
+        logger.error(f"Erro ao enviar convite VIP inicial para user {user_id}: {e}", exc_info=True)
+        # O estado do usuário não será alterado se a mensagem falhar, permitindo uma nova tentativa ou intervenção.
+        return
     
     if user_id in user_states and isinstance(user_states[user_id], dict):
         user_states[user_id]["state"] = "convite_vip_enviado" 
     else:
         user_states[user_id] = {"state": "convite_vip_enviado", "pending_reminder_jobs": []}
-
+    logger.info(f"Estado do user {user_id} atualizado para: {user_states[user_id]['state']}")
 
 async def mostrar_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
+    chat_id = query.message.chat_id 
     await query.answer()
 
+    logger.info(f"[MOSTRAR_PLANOS] User: {user_id}. Estado ANTES: {user_states.get(user_id, {}).get('state')}")
     remover_jobs_lembrete_anteriores(user_id, context) 
     user_states[user_id] = {"state": "visualizando_planos", "pending_reminder_jobs": []} 
+    logger.info(f"[MOSTRAR_PLANOS] User: {user_id}. Estado DEPOIS: {user_states[user_id]['state']}")
+
 
     keyboard = [
         [InlineKeyboardButton(f"💎 {PLANOS['1_mes']['nome']} - {PLANOS['1_mes']['valor']}", callback_data="plano_1_mes")],
@@ -323,25 +368,31 @@ async def mostrar_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Clica no plano desejado:"
     )
     
-    if query.message:
-         await query.edit_message_text(
-            text=texto_planos,
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN_V2
-        )
-    else: 
-        await context.bot.send_message(
-            chat_id=user_id,
-            text=texto_planos,
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN_V2
-        )
+    try:
+        if query.message: # Se originou de um callback com mensagem (normal)
+            await query.edit_message_text(
+                text=texto_planos,
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+        else: # Fallback se não houver query.message (raro para este handler)
+            await context.bot.send_message(
+                chat_id=user_id, # Assume chat_id é user_id se não houver query.message
+                text=texto_planos,
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+        logger.info(f"Planos mostrados para user {user_id}")
+    except telegram.error.BadRequest as e:
+        if "message is not modified" in str(e).lower():
+            logger.warning(f"Mensagem de planos não modificada para user {user_id}: {e}")
+        else:
+            logger.error(f"Erro ao mostrar planos para user {user_id}: {e}", exc_info=True)
+            return # Não agendar jobs se a mensagem falhou
 
-    chat_id = query.message.chat_id if query.message else user_id
     job_context_name_base = f"{JOB_LEMBRETE_PLANOS_PREFIX}{user_id}" 
     
-    # ATENÇÃO: Delays de produção. Mude para valores menores para TESTE rápido.
-    delays_lembrete = {"1min": 1*60, "5min": 5*60, "10min": 10*60} 
+    delays_lembrete = {"1min": 1*60, "5min": 5*60, "10min": 10*60} # PRODUÇÃO
     # delays_lembrete = {"1min": 10, "5min": 20, "10min": 30} # TESTE
 
     jobs_agendados = []
@@ -361,11 +412,14 @@ async def mostrar_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for job_obj in jobs_agendados:
             if job_obj: job_obj.schedule_removal()
 
+
 async def detalhes_plano(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
+    chat_id = query.message.chat_id
     await query.answer()
     
+    logger.info(f"[DETALHES_PLANO] User: {user_id}. Estado ANTES: {user_states.get(user_id, {}).get('state')}")
     remover_jobs_lembrete_anteriores(user_id, context) 
 
     plano_key = query.data.replace("plano_", "")
@@ -377,6 +431,7 @@ async def detalhes_plano(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     estado_visualizando_detalhes = f"visualizando_detalhes_{plano_key}"
     user_states[user_id] = {"state": estado_visualizando_detalhes, "plano_selecionado": plano_key, "pending_reminder_jobs": []}
+    logger.info(f"[DETALHES_PLANO] User: {user_id}. Estado DEPOIS: {user_states[user_id]['state']}")
     
     keyboard = [
         [InlineKeyboardButton("💳 Gerar PIX", callback_data=f"gerar_pix_{plano_key}")],
@@ -400,17 +455,23 @@ async def detalhes_plano(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ Meus novos conteúdos adicionados regularmente\n\n"
         f"Clique em 'Gerar PIX' para continuar\\! 👇" 
     )
-    await query.edit_message_text(
-        texto_detalhes, 
-        reply_markup=reply_markup,
-        parse_mode=ParseMode.MARKDOWN_V2
-    )
+    try:
+        await query.edit_message_text(
+            texto_detalhes, 
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        logger.info(f"Detalhes do plano {plano_key} mostrados para user {user_id}")
+    except telegram.error.BadRequest as e:
+        if "message is not modified" in str(e).lower():
+            logger.warning(f"Mensagem de detalhes do plano não modificada para user {user_id}: {e}")
+        else:
+            logger.error(f"Erro ao mostrar detalhes do plano {plano_key} para user {user_id}: {e}", exc_info=True)
+            return # Não agendar jobs se a mensagem falhou
 
-    chat_id = query.message.chat_id
     job_context_name_base = f"{JOB_LEMBRETE_DETALHES_PREFIX}{user_id}_{plano_key}"
     
-    # ATENÇÃO: Delays de produção. Mude para valores menores para TESTE rápido.
-    delays_lembrete = {"1min": 60, "5min": 5*60, "10min": 10*60} 
+    delays_lembrete = {"1min": 1*60, "5min": 5*60, "10min": 10*60} # PRODUÇÃO
     # delays_lembrete = {"1min": 10, "5min": 20, "10min": 30} # TESTE
 
     jobs_agendados = []
@@ -435,6 +496,7 @@ async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     await query.answer()
     
+    logger.info(f"[GERAR_PIX] User: {user_id}. Estado ANTES: {user_states.get(user_id, {}).get('state')}")
     remover_jobs_lembrete_anteriores(user_id, context) 
 
     plano_key = query.data.replace("gerar_pix_", "")
@@ -444,6 +506,7 @@ async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
         
     user_states[user_id] = {"state": f"gerou_pix_{plano_key}", "pending_reminder_jobs": []} 
+    logger.info(f"[GERAR_PIX] User: {user_id}. Estado DEPOIS: {user_states[user_id]['state']}")
     
     plano = PLANOS[plano_key]
     pix_code = LINKS_PIX[plano_key] 
