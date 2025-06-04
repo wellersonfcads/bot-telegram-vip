@@ -973,31 +973,52 @@ def main():
     keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
     keep_alive_thread.start()
     
-    # Inicia a tarefa de verificação de notificações de vencimento
-    asyncio.create_task(verificar_notificacoes_vencimento(application))
+    # A tarefa de verificação de notificações de vencimento será iniciada após o bot estar em execução
+    # Não podemos usar asyncio.create_task() aqui porque não estamos em um contexto assíncrono
     
     # Inicia o bot
     logger.info("Bot iniciado! Pressione Ctrl+C para parar.")
     return application
 
-if __name__ == '__main__':
-    # Configuração para evitar conflitos de múltiplas instâncias
+async def start_bot():
+    """Inicia o bot e as tarefas assíncronas"""
     try:
-        # Cria e inicia a aplicação
+        # Cria a aplicação
         app = main()
-        # Usa drop_pending_updates para evitar processamento de mensagens antigas
-        app.run_polling(
-            drop_pending_updates=True, 
+        
+        # Inicia a tarefa de verificação de notificações de vencimento
+        asyncio.create_task(verificar_notificacoes_vencimento(app))
+        
+        # Inicia o bot com polling
+        await app.start()
+        await app.updater.start_polling(
+            drop_pending_updates=True,
             allowed_updates=["message", "callback_query", "chat_member"]
         )
+        
+        # Mantém o bot rodando até ser interrompido
+        await app.updater.stop()
+        await app.stop()
+        
     except telegram.error.Conflict:
         logger.error("Conflito detectado: outra instância do bot já está em execução.")
         logger.info("Tentando reiniciar com configurações diferentes...")
+        
         # Tenta novamente com configurações diferentes
         app = main()
-        app.run_polling(
-            drop_pending_updates=True, 
+        await app.start()
+        await app.updater.start_polling(
+            drop_pending_updates=True,
             allowed_updates=["message", "callback_query", "chat_member"]
         )
+        
+        # Mantém o bot rodando até ser interrompido
+        await app.updater.stop()
+        await app.stop()
+        
     except Exception as e:
         logger.error(f"Erro ao iniciar o bot: {e}")
+
+if __name__ == '__main__':
+    # Executa a função assíncrona principal
+    asyncio.run(start_bot())
