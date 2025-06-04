@@ -864,6 +864,7 @@ def main():
     # Define a descrição do bot que aparecerá antes do funil iniciar
     async def set_bot_description():
         bot = Bot(BOT_TOKEN)
+        # Define a descrição do bot
         await bot.set_my_description(
             "Seja bem-vindo ao meu Canal VIP 🔥\n\n"
             "🌶 Interação com os assinantes\n"
@@ -872,6 +873,26 @@ def main():
             "🌶 Lives e Sorteios\n\n"
             "Para ter acesso, clique em /start agora mesmo!"
         )
+        
+        # Define comandos apenas para o administrador (você) e oculta para usuários normais
+        from telegram.ext import BotCommandScopeChat
+        
+        # Lista de comandos disponíveis apenas para o administrador
+        admin_commands = [
+            ("start", "Iniciar o bot"),
+            ("usuarios", "Listar usuários VIP"),
+            ("remover", "Remover um usuário do VIP")
+        ]
+        
+        # Remove comandos do menu para todos os usuários (oculta o menu)
+        await bot.delete_my_commands()
+        
+        # Adiciona comandos apenas para o administrador
+        await bot.set_my_commands(
+            commands=admin_commands,
+            scope=BotCommandScopeChat(chat_id=SEU_USER_ID)
+        )
+        
         await bot.close()
     
     # Executa a função para definir a descrição do bot
