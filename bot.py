@@ -83,8 +83,6 @@ def init_db():
 
 def escape_markdown_v2(text: str) -> str:
     """Escapa caracteres especiais para MarkdownV2."""
-    # Note que ` dentro de `code spans` ou ```code blocks``` não devem ser escapados.
-    # Esta função simples escapa tudo. Para casos complexos, uma análise mais detalhada seria necessária.
     escape_chars = r'_*[]()~`>#+-=|{}.!'
     return "".join(f"\\{char}" if char in escape_chars else char for char in text)
 
@@ -102,7 +100,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Você tem 18 anos ou mais?"
     )
     await update.message.reply_text(
-        escape_markdown_v2(texto_start), # CORRIGIDO: Texto escapado
+        escape_markdown_v2(texto_start),
         reply_markup=reply_markup,
         parse_mode=ParseMode.MARKDOWN_V2
     )
@@ -117,7 +115,7 @@ async def handle_idade(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Volte quando completar 18 anos! 😊"
         )
         await query.edit_message_text(
-            escape_markdown_v2(texto_idade_nao), # CORRIGIDO: Texto escapado
+            escape_markdown_v2(texto_idade_nao),
             parse_mode=ParseMode.MARKDOWN_V2 
         )
         return
@@ -198,9 +196,11 @@ async def mostrar_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "💎 *MEUS PLANOS VIP DISPONÍVEIS*\n\n"
         "Escolhe o plano que mais combina com você, amor:\n\n"
         "✨ Todos os planos incluem acesso completo ao meu conteúdo exclusivo!\n"
-        "🔥 Quanto maior o plano, melhor o custo-benefício!\n\n"
+        "🔥 Quanto maior o plano, melhor o custo-benefício!\n\n" # Note: Custo-benefício com '-'
         "Clica no plano desejado:"
     )
+    # Para custo-benefício, se quiser literal, precisa escapar o traço: custo\\-benefício
+    # A função escape_markdown_v2 já cuidará disso.
     await query.edit_message_text(
         escape_markdown_v2(texto_planos),
         reply_markup=reply_markup,
@@ -238,7 +238,7 @@ async def detalhes_plano(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ Minhas fotos e vídeos que não posto em lugar nenhum\n"
         f"✅ Contato direto comigo\n"
         f"✅ Meus novos conteúdos adicionados regularmente\n\n"
-        f"Clique em 'Gerar PIX' para continuar! 👇"
+        f"Clique em 'Gerar PIX' para continuar! 👇" # Escapado pela função wrapper
     )
     await query.edit_message_text(
         escape_markdown_v2(texto_detalhes), 
@@ -275,6 +275,7 @@ async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nome_plano_escapado = escape_markdown_v2(plano['nome'])
     valor_plano_escapado = escape_markdown_v2(plano['valor'])
 
+    # CORRIGIDO: caractere '>' escapado para '\\>'
     texto_gerar_pix = (
         f"💳 *PIX para Pagamento \\- {nome_plano_escapado}*\n\n"
         f"💰 Valor: *{valor_plano_escapado}*\n\n"
@@ -282,13 +283,13 @@ async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"`{pix_code}`\n\n" 
         f"📱 *Como pagar:*\n"
         f"1️⃣ Clique em 'Copiar PIX' abaixo\\.\n"
-        f"2️⃣ Abra seu app bancário e escolha PIX > Copia e Cola\\.\n"
+        f"2️⃣ Abra seu app bancário e escolha PIX \\> Copia e Cola\\.\n" # '>' escapado aqui
         f"3️⃣ Cole o código e confirme o pagamento\\.\n"
         f"4️⃣ Após pagar, clique em 'Já Paguei \\- Enviar Comprovante' para me enviar a foto do comprovante\\.\n\n"
         f"💕 Estou ansiosa para te receber no meu VIP, amor\\!"
     )
     await query.edit_message_text(
-        texto_gerar_pix, # Já foi construído com escapes
+        texto_gerar_pix, 
         reply_markup=reply_markup,
         parse_mode=ParseMode.MARKDOWN_V2
     )
@@ -356,7 +357,7 @@ async def receber_comprovante(update: Update, context: ContextTypes.DEFAULT_TYPE
     if user_id in user_states: del user_states[user_id]
     
     texto_conf_user = (
-        "✅ *Comprovante Recebido!* \n\n" # Escapado se necessário, mas ! no final de *bold* é ok
+        "✅ *Comprovante Recebido!* \n\n"
         "Perfeito, amor! Recebi seu comprovante e vou verificar agora mesmo.\n\n"
         "⏰ Em poucos minutos você receberá o link de acesso ao meu grupo VIP!\n\n"
         "💕 Obrigada pela paciência, amor!"
@@ -764,16 +765,27 @@ async def pre_run_bot_operations(application: Application):
              logger.error(f"Erro de parsing de Markdown/HTML: {context.error}")
              if update and hasattr(update, 'effective_chat') and update.effective_chat:
                  try:
+                    # Monta a mensagem de erro para o admin
+                    error_details = f"Erro: {html.escape(str(context.error))}\n"
+                    if hasattr(update, 'message') and update.message and hasattr(update.message, 'text'):
+                        error_details += f"Mensagem original (se houver): {html.escape(str(update.message.text))}\n"
+                    elif hasattr(update, 'callback_query') and update.callback_query and hasattr(update.callback_query, 'data'):
+                        error_details += f"Callback query data: {html.escape(str(update.callback_query.data))}\n"
+                    
+                    # Limita o tamanho do update problemático para evitar exceder o limite de mensagem
+                    update_str = str(update)
+                    max_len = 4096 - len(error_details) - 100 # Deixa espaço para o resto
+                    error_details += f"Update problemático: {html.escape(update_str[:max_len])}"
+                    if len(update_str) > max_len:
+                        error_details += "..."
+
                     await context.bot.send_message(
                         chat_id=ADMIN_ID,
-                        text=f"⚠️ Erro de parsing de entidade ao tentar enviar mensagem para o chat {update.effective_chat.id} ou para o usuário.\n"
-                             f"Erro: {html.escape(str(context.error))}\n"
-                             f"Update problemático: {html.escape(str(update))}"[:4000], # Limita tamanho
+                        text=f"⚠️ Erro de parsing de entidade ao tentar enviar/editar mensagem.\n{error_details}",
                         parse_mode=ParseMode.HTML
                     )
                  except Exception as e_notify:
                     logger.error(f"Falha ao notificar admin sobre erro de parsing: {e_notify}")
-
 
     application.add_error_handler(error_handler_callback)
     logger.info("Error handler global adicionado à aplicação.")
@@ -825,7 +837,7 @@ async def run_bot_async():
         logger.critical(f"Erro crítico durante a execução do bot (polling/start): {e}", exc_info=True)
     finally:
         logger.info("Iniciando processo de shutdown do bot...")
-        if 'application' in locals() and application: # Verificação mais simples
+        if 'application' in locals() and application: 
             if hasattr(application, 'running') and application.running: 
                 logger.info("Parando o dispatcher de updates (application.stop())...")
                 await application.stop()
