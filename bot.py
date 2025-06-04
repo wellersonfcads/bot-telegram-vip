@@ -133,13 +133,10 @@ async def enviar_video_apresentacao(context: ContextTypes.DEFAULT_TYPE):
     chat_id = job_data["chat_id"]
     user_id = job_data["user_id"]
     
-    # Aqui você colocaria o link do seu vídeo
-    # Por enquanto, vou simular com uma mensagem de vídeo
-    # Na implementação real, use context.bot.send_video com o arquivo de vídeo
-    await context.bot.send_message(
+    # Enviando o vídeo usando o file_id fornecido
+    await context.bot.send_video(
         chat_id=chat_id,
-        text="🎥 *[VÍDEO DE APRESENTAÇÃO]*",
-        parse_mode='Markdown'
+        video="BAACAgEAAxkBAAMCaD-U8oLkcSeOdb86LIiCmECDw8MAAg4HAAKAlQABRvU8vUAa8xsjNgQ"
     )
     
     # Aguarda 5 segundos e envia a mensagem sobre o VIP
