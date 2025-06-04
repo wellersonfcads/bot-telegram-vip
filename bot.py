@@ -861,6 +861,22 @@ def main():
     keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
     keep_alive_thread.start()
     
+    # Define a descrição do bot que aparecerá antes do funil iniciar
+    async def set_bot_description():
+        bot = Bot(BOT_TOKEN)
+        await bot.set_my_description(
+            "Seja bem-vindo ao meu Canal VIP 🔥\n\n"
+            "🌶 Interação com os assinantes\n"
+            "🌶 Fotos/Vídeos Exclusivos\n"
+            "🌶 Contos Eróticos\n"
+            "🌶 Lives e Sorteios\n\n"
+            "Para ter acesso, clique em /start agora mesmo!"
+        )
+        await bot.close()
+    
+    # Executa a função para definir a descrição do bot
+    asyncio.run(set_bot_description())
+    
     # Inicia o bot
     logger.info("Bot iniciado! Pressione Ctrl+C para parar.")
     return application
