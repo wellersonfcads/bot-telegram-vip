@@ -4,12 +4,13 @@ import threading
 import time
 from datetime import datetime, timedelta
 import telegram
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, Bot
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ChatMemberHandler, filters, ContextTypes
 import os
 import http.server
 import socketserver
 import urllib.request
+import asyncio
 
 # Configuração de logging
 logging.basicConfig(
@@ -25,6 +26,10 @@ logging.getLogger('httpx').setLevel(logging.WARNING)
 SEU_USER_ID = 6150001511  # Seu user ID do Telegram
 CANAL_VIP_ID = "-1002280243232"  # ID do seu canal VIP
 BOT_TOKEN = "7963030995:AAE8K5RIFJpaOhxLnDxJ4k614wnq4n549AQ"
+
+# Configurações do bot de vídeo
+VIDEO_BOT_TOKEN = "7828157079:AAEtf8Rm4qWdmmTSWp-yTO8EPX1w1oH2_SQ"  # Token do bot que hospeda o vídeo
+VIDEO_CHANNEL_ID = "-1002511850025"  # ID do canal que hospeda o vídeo
 
 # Links PIX (seus códigos originais)
 LINKS_PIX = {
@@ -128,16 +133,33 @@ async def handle_idade(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def enviar_video_apresentacao(context: ContextTypes.DEFAULT_TYPE):
-    """Envia vídeo de apresentação"""
+    """Envia vídeo de apresentação usando um bot separado para o vídeo"""
     job_data = context.job.data
     chat_id = job_data["chat_id"]
     user_id = job_data["user_id"]
     
-    # Enviando o vídeo usando o file_id fornecido
-    await context.bot.send_video(
-        chat_id=chat_id,
-        video="BAACAgEAAyEGAASVt8opAAMHaD-iEtoaQ_BwxO8AAQdFGScwBkMiAAKnDQAC18ABRi-6C5NIW-MXNgQ"
-    )
+    try:
+        # Criando uma instância separada do bot para enviar o vídeo
+        video_bot = Bot(token=VIDEO_BOT_TOKEN)
+        
+        # Enviando o vídeo usando o file_id fornecido
+        await video_bot.send_video(
+            chat_id=chat_id,
+            video="BAACAgEAAyEGAASVt8opAAMHaD-iEtoaQ_BwxO8AAQdFGScwBkMiAAKnDQAC18ABRi-6C5NIW-MXNgQ"
+        )
+        
+        # Fechando a conexão do bot de vídeo
+        await video_bot.close()
+        
+        logger.info(f"Vídeo enviado com sucesso para o usuário {user_id} usando o bot de vídeo")
+    except Exception as e:
+        logger.error(f"Erro ao enviar vídeo: {e}")
+        # Envia uma mensagem alternativa em caso de falha
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="Estou preparando uma surpresa especial para você! 🎁",
+            parse_mode='Markdown'
+        )
     
     # Aguarda 5 segundos e envia a mensagem sobre o VIP
     await context.application.job_queue.run_once(
