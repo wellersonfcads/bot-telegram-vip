@@ -84,17 +84,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando /start com verificação de idade"""
     user_id = update.effective_user.id
     
-    # Mensagem de boas-vindas
-    await update.message.reply_text(
-        "Seja bem-vindo ao meu Canal VIP 🔥\n\n"
-        "🌶 Interação com os assinantes\n\n"
-        "🌶 Fotos/Vídeos Exclusivos\n\n"
-        "🌶 Contos Eróticos\n\n"
-        "🌶 Lives e Sorteios\n\n"
-        "Para ter acesso, clique em /start agora mesmo!",
-        parse_mode='Markdown'
-    )
-    
     # Verificação de idade
     keyboard = [
         [InlineKeyboardButton("✅ Sim, tenho 18 anos ou mais", callback_data="idade_ok")],
@@ -130,18 +119,40 @@ async def handle_idade(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🥰 *Bom te ver por aqui...*\n\n"
             "Que bom que você chegou até mim! "
             "Estou muito animada para te mostrar tudo que preparei especialmente para você...\n\n"
-            "No meu VIP você vai encontrar conteúdos exclusivos que não posto em lugar nenhum... 🙊",
+            "Vou te enviar um vídeo especial em alguns segundos! 💕",
             parse_mode='Markdown'
         )
         
-        # Aguarda 3 segundos e mostra os planos diretamente
+        # Aguarda 3 segundos e envia o próximo passo
         await context.application.job_queue.run_once(
-            mostrar_acesso_vip, 
+            enviar_video_apresentacao, 
             3, 
             data={"chat_id": query.message.chat_id, "user_id": user_id}
         )
 
-# Função de vídeo removida conforme solicitado
+async def enviar_video_apresentacao(context: ContextTypes.DEFAULT_TYPE):
+    """Envia vídeo de apresentação"""
+    job_data = context.job.data
+    chat_id = job_data["chat_id"]
+    user_id = job_data["user_id"]
+    
+    # Aqui você colocaria o link do seu vídeo
+    # Por enquanto, vou simular com uma mensagem
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text="🎥 *[VÍDEO DE APRESENTAÇÃO]*\n\n"
+             "Oi amor! Sou a Clarinha e estou muito feliz que você chegou até aqui! ✨\n\n"
+             "_[Aqui seria seu vídeo de apresentação]_\n\n"
+             "No meu VIP você vai encontrar conteúdos exclusivos que não posto em lugar nenhum... 🔥",
+        parse_mode='Markdown'
+    )
+    
+    # Aguarda 5 segundos e mostra os planos
+    await context.application.job_queue.run_once(
+        mostrar_acesso_vip, 
+        5, 
+        data={"chat_id": chat_id, "user_id": user_id}
+    )
 
 async def mostrar_acesso_vip(context: ContextTypes.DEFAULT_TYPE):
     """Mostra opção de acesso VIP"""
@@ -149,7 +160,7 @@ async def mostrar_acesso_vip(context: ContextTypes.DEFAULT_TYPE):
     chat_id = job_data["chat_id"]
     
     keyboard = [
-        [InlineKeyboardButton("⭐ GRUPO VIP", callback_data="ver_planos")]
+        [InlineKeyboardButton("🔥 QUERO TER ACESSO AO VIP", callback_data="ver_planos")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
