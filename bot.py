@@ -110,6 +110,7 @@ def remover_jobs_lembrete_anteriores(user_id: int, context: ContextTypes.DEFAULT
     elif user_id in user_states:
         logger.warning(f"Estrutura de user_states[{user_id}] inesperada ao tentar remover jobs: {user_states[user_id]}")
 
+
 async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
     if not job or not job.data:
@@ -121,6 +122,8 @@ async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
     estado_esperado_no_job = job.data.get("contexto_job") 
     delay = job.data.get("delay")
     plano_key_lembrete = job.data.get("plano_key")
+    # Novo: obter o ID da mensagem anterior a ser deletada
+    msg_id_para_deletar = job.data.get("previous_message_id")
 
     if not all([chat_id, user_id, estado_esperado_no_job, delay]):
         logger.error(f"Dados incompletos no job de lembrete: {job.data} para user {user_id}")
@@ -134,6 +137,15 @@ async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
         return
 
     logger.info(f"Executando lembrete {delay} para user {user_id} no contexto '{estado_esperado_no_job}'.")
+    
+    # --- NOVO: Deletar a mensagem anterior ---
+    if msg_id_para_deletar:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=msg_id_para_deletar)
+            logger.info(f"Mensagem anterior (ID: {msg_id_para_deletar}) deletada para user {user_id} antes de enviar novo lembrete.")
+        except Exception as e:
+            logger.warning(f"Não foi possível deletar mensagem de lembrete anterior (ID: {msg_id_para_deletar}): {e}")
+
     mensagem = ""
     keyboard_lembrete = None
     sent_reminder_message = None 
@@ -152,6 +164,7 @@ async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("❌ Não tenho 18 anos", callback_data="idade_nao")]
             ])
 
+    # ... (outros elif para visualizando_planos, visualizando_detalhes_)
     elif estado_esperado_no_job == "visualizando_planos":
         if delay == "1min":
             mensagem = "Ei, vi que você está de olho nos meus planos VIP 👀\\! Qual deles chamou mais sua atenção, amor? Não perca tempo, o conteúdo exclusivo te espera\\! 🔥"
@@ -212,20 +225,14 @@ async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=keyboard_lembrete,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
-            if estado_esperado_no_job == "aguardando_verificacao_idade" and sent_reminder_message:
-                if user_id in user_states and isinstance(user_states[user_id], dict):
-                    if 'age_verification_message_ids' not in user_states[user_id] or \
-                       not isinstance(user_states[user_id].get('age_verification_message_ids'), list):
-                        user_states[user_id]['age_verification_message_ids'] = []
-                    user_states[user_id]['age_verification_message_ids'].append(sent_reminder_message.message_id)
-                    logger.info(f"Lembrete {delay} (MsgID: {sent_reminder_message.message_id}) enviado e ID armazenado para user {user_id}.")
-                else:
-                    logger.warning(f"user_states[{user_id}] não é dict ao tentar armazenar age_verification_message_id.")
-            else:
-                 logger.info(f"Lembrete {delay} enviado para user {user_id} no contexto '{estado_esperado_no_job}'.")
+            # Armazena o ID da nova mensagem de lembrete no estado do usuário
+            # para que o PRÓXIMO lembrete possa deletá-la.
+            if user_id in user_states and isinstance(user_states[user_id], dict):
+                user_states[user_id]['last_reminder_message_id'] = sent_reminder_message.message_id
+                logger.info(f"Lembrete {delay} (MsgID: {sent_reminder_message.message_id}) enviado e ID armazenado para user {user_id}.")
 
         except telegram.error.BadRequest as br_err:
-            logger.error(f"BadRequest ao enviar lembrete {delay} para user {user_id} (chat {chat_id}): {br_err}. Mensagem: '{mensagem}'", exc_info=True)
+            logger.error(f"BadRequest ao enviar lembrete {delay} para user {user_id}: {br_err}", exc_info=True)
         except Exception as e:
             logger.error(f"Erro geral ao enviar lembrete {delay} para user {user_id}: {e}", exc_info=True)
 
@@ -241,7 +248,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_states[user_id].update({
         "state": "aguardando_verificacao_idade", 
         "pending_reminder_jobs": [],
-        "age_verification_message_ids": [] 
+        # "age_verification_message_ids" não é mais necessário, usaremos last_reminder_message_id
+        "last_reminder_message_id": None
     })
     logger.info(f"[START] User {user_id} iniciou. Estado definido para 'aguardando_verificacao_idade'.")
 
@@ -262,8 +270,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN_V2
         )
-        if sent_message and user_id in user_states and isinstance(user_states[user_id].get('age_verification_message_ids'), list):
-            user_states[user_id]['age_verification_message_ids'].append(sent_message.message_id)
+        if sent_message and user_id in user_states and isinstance(user_states[user_id], dict):
+            user_states[user_id]['last_reminder_message_id'] = sent_message.message_id
             logger.info(f"[START] Mensagem inicial de verificação (MsgID: {sent_message.message_id}) enviada e ID armazenado para user {user_id}.")
 
     except Exception as e:
@@ -272,18 +280,29 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     job_context_name_base = f"{JOB_LEMBRETE_IDADE_PREFIX}{user_id}"
     
-    # Mude os valores abaixo para testar (em segundos) ou deixe para produção (em minutos * 60)
+    # ATENÇÃO: Delays para PRODUÇÃO (1min, 5min, 10min). Mude para valores menores para TESTE rápido (ex: 10, 20, 30).
     delays_lembrete = {"1min_idade": 1*60, "5min_idade": 5*60, "10min_idade": 10*60} 
 
     jobs_agendados = []
+    # MODIFICADO: Passar o ID da mensagem anterior para o próximo job
+    previous_msg_id = user_states[user_id]['last_reminder_message_id']
     for delay_tag, delay_seconds in delays_lembrete.items():
+        job_data = {
+            "chat_id": chat_id, 
+            "user_id": user_id, 
+            "contexto_job": "aguardando_verificacao_idade", 
+            "delay": delay_tag,
+            "previous_message_id": previous_msg_id
+        }
         job = context.application.job_queue.run_once(
             callback_lembrete, 
             delay_seconds, 
-            data={"chat_id": chat_id, "user_id": user_id, "contexto_job": "aguardando_verificacao_idade", "delay": delay_tag}, 
+            data=job_data,
             name=f"{job_context_name_base}_{delay_tag}"
         )
         jobs_agendados.append(job)
+        # O ID da mensagem para o *próximo* job será o ID da mensagem que este job *vai* criar.
+        # No entanto, não sabemos o ID da mensagem futura. A lógica de deletar no início do callback é mais simples.
     
     if user_id in user_states and isinstance(user_states[user_id], dict):
          user_states[user_id]['pending_reminder_jobs'] = jobs_agendados
@@ -303,39 +322,22 @@ async def handle_idade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"[HANDLE_IDADE] Triggered. User: {user_id}, Data: {query.data}, Message ID: {query.message.message_id if query.message else 'N/A'}")
     await query.answer() 
     
+    # Remover jobs de lembrete futuros
     remover_jobs_lembrete_anteriores(user_id, context)
     
-    # Desativar botões das mensagens antigas de verificação de idade
+    # Deletar a última mensagem de verificação de idade que está na tela (que não é a que foi clicada)
     if user_id in user_states and isinstance(user_states.get(user_id), dict):
-        message_ids_to_process = user_states[user_id].get('age_verification_message_ids', [])
-        
-        for msg_id in message_ids_to_process:
-            # A mensagem que originou o callback será editada pela lógica principal
-            if query.message and msg_id == query.message.message_id:
-                continue 
-            try:
-                # Remove o teclado das mensagens antigas, mantendo o texto.
-                await context.bot.edit_message_reply_markup(
-                    chat_id=chat_id,
-                    message_id=msg_id,
-                    reply_markup=None 
-                )
-                logger.info(f"Teclado da mensagem de verificação antiga (ID: {msg_id}) removido para user {user_id}.")
-            except telegram.error.BadRequest as e:
-                if "message to edit not found" in str(e).lower() or \
-                   "message can't be edited" in str(e).lower() or \
-                   "message is not modified" in str(e).lower() or \
-                   "chat not found" in str(e).lower():
-                    logger.warning(f"Não foi possível editar/remover teclado da msg antiga (ID: {msg_id}) para user {user_id}: {e}")
-                else:
-                    logger.error(f"Erro BadRequest ao editar markup da msg antiga (ID: {msg_id}): {e}", exc_info=True)
-            except Exception as e:
-                logger.error(f"Erro geral ao editar markup da msg antiga (ID: {msg_id}): {e}", exc_info=True)
-        
-        if user_states.get(user_id):
-            user_states[user_id]['age_verification_message_ids'] = [] 
+        last_msg_id = user_states[user_id].get('last_reminder_message_id')
+        if last_msg_id and query.message and last_msg_id != query.message.message_id:
+             try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=last_msg_id)
+                logger.info(f"Última mensagem de verificação (ID: {last_msg_id}) deletada para user {user_id}.")
+             except Exception as e:
+                logger.warning(f"Não foi possível deletar última mensagem de verificação (ID: {last_msg_id}): {e}")
 
-    # Processar a ação do usuário
+        # Limpa o estado relacionado
+        user_states[user_id].pop('last_reminder_message_id', None)
+
     if query.data == "idade_nao":
         texto_idade_nao = (
             "❌ Desculpe amor, meu conteúdo é apenas para maiores de 18 anos\\.\n\n"
@@ -347,11 +349,11 @@ async def handle_idade(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except telegram.error.BadRequest as e:
             logger.warning(f"Não foi possível editar mensagem 'idade_nao' para user {user_id}: {e}")
         
-        user_states[user_id] = {"state": "idade_recusada", "pending_reminder_jobs": []} 
+        user_states[user_id] = {"state": "idade_recusada"} 
         return
     
     if query.data == "idade_ok":
-        user_states[user_id] = {"state": "idade_ok_proximo_passo", "pending_reminder_jobs": []}
+        user_states[user_id] = {"state": "idade_ok_proximo_passo"}
         
         texto_boas_vindas = "🥰 Bom te ver por aqui\\.\\.\\."
         try:
@@ -394,15 +396,14 @@ async def enviar_convite_vip_inicial(context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Erro ao enviar convite VIP inicial para user {user_id}: {e}", exc_info=True)
         return
     
-    if user_id in user_states and isinstance(user_states[user_id], dict):
-        user_states[user_id]["state"] = "convite_vip_enviado" 
-    else:
-        user_states[user_id] = {"state": "convite_vip_enviado", "pending_reminder_jobs": []}
+    user_states[user_id] = {"state": "convite_vip_enviado"}
 
+
+# O resto do código permanece o mesmo
 async def mostrar_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
-    chat_id = query.message.chat_id if query.message else user_id
+    chat_id = query.message.chat_id 
     await query.answer()
 
     remover_jobs_lembrete_anteriores(user_id, context) 
@@ -545,10 +546,6 @@ async def detalhes_plano(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if job_obj: job_obj.schedule_removal()
 
 
-# --- O RESTANTE DO CÓDIGO PERMANECE IGUAL ---
-# (As funções de gerar_pix, ja_paguei, etc. já estão boas e foram incluídas na resposta completa anterior)
-# Aqui, vou colar o restante para garantir que você tenha tudo em um só lugar.
-
 async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
@@ -637,8 +634,6 @@ async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for job_obj in jobs_agendados: 
             if job_obj: job_obj.schedule_removal()
 
-
-# --- O restante do código é igual ---
 async def copiar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer("PIX copiado! 📋\nCole no seu app bancário na opção PIX > Copia e Cola", show_alert=True)
@@ -678,7 +673,6 @@ async def receber_comprovante(update: Update, context: ContextTypes.DEFAULT_TYPE
     current_state = user_state_info.get("state")
     
     if current_state == "aguardando_comprovante":
-        # Processamento normal do comprovante
         remover_jobs_lembrete_anteriores(user_id, context)
         plano_key = user_state_info.get("plano_key_comprovante")
 
@@ -750,9 +744,6 @@ async def receber_comprovante(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     else:
         logger.info(f"User {user_id} enviou uma foto/documento fora de contexto (estado: {current_state}). Ignorando.")
-
-
-# ... (O restante do código, de processar_aprovacao até o final, permanece o mesmo) ...
 
 async def processar_aprovacao(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
