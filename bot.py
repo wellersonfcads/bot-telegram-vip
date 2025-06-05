@@ -4,7 +4,6 @@ import threading
 import time
 from datetime import datetime, timedelta
 import telegram
-# --- ALTERADO: Importações adicionadas para o menu de comandos ---
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, BotCommandScopeDefault, BotCommandScopeChat
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ChatMemberHandler, filters, ContextTypes, Job
 from telegram.constants import ParseMode
@@ -1159,7 +1158,7 @@ def start_keep_alive_server():
     except Exception as e:
         logger.critical(f"Exceção não esperada ao iniciar servidor keep-alive: {e}", exc_info=True)
 
-# --- NOVO: Função para o comando /meu_plano ---
+# --- FUNÇÃO ADICIONADA: /meu_plano ---
 async def meu_plano_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_info = update.effective_user
@@ -1209,6 +1208,61 @@ async def meu_plano_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(texto, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
 
+# --- FUNÇÃO ADICIONADA: /dashboard ---
+async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    msg = await update.message.reply_text("📊 Analisando os dados e montando seu dashboard...")
+
+    try:
+        with sqlite3.connect(DB_PATH, timeout=10) as conn:
+            cursor = conn.cursor()
+
+            # 1. Total de membros ativos
+            cursor.execute("SELECT COUNT(*) FROM usuarios_vip WHERE ativo = 1")
+            total_ativos = cursor.fetchone()[0]
+
+            # 2. Novos assinantes nos últimos 7 dias
+            cursor.execute("SELECT COUNT(*) FROM usuarios_vip WHERE data_entrada >= date('now', '-7 days')")
+            novos_na_semana = cursor.fetchone()[0]
+
+            # 3. Vendas nos últimos 7 dias
+            cursor.execute("SELECT plano FROM pagamentos_pendentes WHERE aprovado = 1 AND data_solicitacao >= date('now', '-7 days')")
+            planos_vendidos_semana = cursor.fetchall()
+            
+            vendas_semana = 0
+            for (plano_key,) in planos_vendidos_semana:
+                valor_str = PLANOS.get(plano_key, {}).get('valor', 'R$ 0')
+                valor_float = float(valor_str.replace('R$ ', '').replace(',', '.'))
+                vendas_semana += valor_float
+
+            # 4. Distribuição de planos entre membros ativos
+            cursor.execute("SELECT plano, COUNT(*) FROM usuarios_vip WHERE ativo = 1 GROUP BY plano")
+            distribuicao_planos = cursor.fetchall()
+            
+            distribuicao_texto = ""
+            if not distribuicao_planos:
+                distribuicao_texto = "Nenhum membro ativo com plano definido\\."
+            else:
+                for plano_key, count in distribuicao_planos:
+                    nome_plano = PLANOS.get(plano_key, {}).get('nome', plano_key)
+                    distribuicao_texto += f"• {escape_markdown_v2(nome_plano)}: *{count}* membro(s)\n"
+
+        texto_dashboard = (
+            f"📊 *Dashboard \\- Resumo do Negócio*\n\n"
+            f"👥 *Total de Membros VIP Ativos:* {total_ativos}\n"
+            f"📈 *Novos Assinantes (últimos 7 dias):* {novos_na_semana}\n"
+            f"💰 *Vendas (últimos 7 dias):* R$ {vendas_semana:.2f}\n\n"
+            f"💎 *Distribuição de Planos Ativos:*\n"
+            f"{distribuicao_texto}"
+        )
+        await msg.edit_text(texto_dashboard, parse_mode=ParseMode.MARKDOWN_V2)
+
+    except Exception as e:
+        logger.error(f"Erro ao gerar o dashboard: {e}", exc_info=True)
+        await msg.edit_text("❌ Ops, ocorreu um erro ao gerar seu dashboard. Tente novamente mais tarde.")
+
 
 def configure_application():
     init_db()
@@ -1216,8 +1270,9 @@ def configure_application():
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("meu_plano", meu_plano_command)) # --- ADICIONADO
+    application.add_handler(CommandHandler("meu_plano", meu_plano_command))
     application.add_handler(CommandHandler("usuarios", listar_usuarios))
+    application.add_handler(CommandHandler("dashboard", dashboard_command)) # --- ADICIONADO
     application.add_handler(CommandHandler("remover", remover_usuario))
     
     application.add_handler(CallbackQueryHandler(handle_idade, pattern="^idade_"))
@@ -1303,7 +1358,6 @@ async def pre_run_bot_operations(application: Application):
     except Exception as e:
         logger.error(f"Erro inesperado durante delete_webhook: {e}", exc_info=True)
     
-    # --- NOVO: Definindo menus de comando personalizados ---
     logger.info("Configurando menus de comandos personalizados...")
 
     user_commands = [
@@ -1313,7 +1367,8 @@ async def pre_run_bot_operations(application: Application):
     
     admin_commands = user_commands + [
         BotCommand("usuarios", "👥 Listar membros VIP"),
-        BotCommand("remover", "❌ Remover membro por ID")
+        BotCommand("remover", "❌ Remover membro por ID"),
+        BotCommand("dashboard", "📈 Ver resumo do negócio") # --- ADICIONADO
     ]
 
     try:
