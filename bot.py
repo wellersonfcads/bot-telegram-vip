@@ -109,11 +109,7 @@ def init_db():
             
         conn.commit()
 
-# ... (todas as suas funções de bot, como start, handle_idade, etc., viriam aqui)
-# ...
-# Vou colar o bloco inteiro de funções que já criamos e corrigimos
-# para garantir que nada falte.
-# ...
+# --- Funções de Utilidade e Estado ---
 
 def set_user_state(user_id: int, state: str, plano_key: str = None):
     with sqlite3.connect(DB_PATH, timeout=10) as conn:
@@ -138,6 +134,8 @@ def get_user_state(user_id: int) -> dict:
 def escape_markdown_v2(text: str) -> str:
     escape_chars = r'_*[]()~`>#+-=|{}.!'
     return "".join(f"\\{char}" if char in escape_chars else char for char in text)
+
+# --- Funções de Lembrete e Jobs ---
 
 def remover_jobs_lembrete_anteriores(user_id: int, context: ContextTypes.DEFAULT_TYPE):
     if user_id in user_states and isinstance(user_states[user_id], dict) and 'pending_reminder_jobs' in user_states[user_id]:
@@ -1252,15 +1250,18 @@ async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 for plano_key, count in distribuicao_planos:
                     nome_plano = PLANOS.get(plano_key, {}).get('nome', plano_key)
                     distribuicao_texto += f"• {escape_markdown_v2(nome_plano)}: *{count}* membro(s)\n"
+        
+        vendas_str_formatada = f"{vendas_semana:.2f}".replace('.', ',')
 
         texto_dashboard = (
             f"📊 *Dashboard \\- Resumo do Negócio*\n\n"
             f"👥 *Total de Membros VIP Ativos:* {total_ativos}\n"
             f"📈 *Novos Assinantes \\(últimos 7 dias\\):* {novos_na_semana}\n"
-            f"💰 *Vendas \\(últimos 7 dias\\):* R$ {vendas_semana:.2f}\\.\n\n"
+            f"💰 *Vendas \\(últimos 7 dias\\):* R$ {vendas_str_formatada}\n\n"
             f"💎 *Distribuição de Planos Ativos:*\n"
             f"{distribuicao_texto}"
         )
+        
         await msg.edit_text(texto_dashboard, parse_mode=ParseMode.MARKDOWN_V2)
 
     except Exception as e:
