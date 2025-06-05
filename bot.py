@@ -61,6 +61,9 @@ PLANOS = {
     "6_meses": {"nome": "Plano VIP 6 meses", "valor": "R$ 179,90", "dias": 180},
     "12_meses": {"nome": "Plano VIP 12 meses", "valor": "R$ 289,90", "dias": 365}
 }
+# <--- ALTERADO --->
+# O user_states agora é usado apenas para armazenar jobs de lembrete em memória.
+# O estado da conversa do usuário será persistido no banco de dados.
 user_states = {}
 
 # Constantes para nomes/prefixos de jobs de lembrete
@@ -69,9 +72,14 @@ JOB_LEMBRETE_PLANOS_PREFIX = "lembrete_planos_user_"
 JOB_LEMBRETE_DETALHES_PREFIX = "lembrete_detalhes_user_"
 JOB_LEMBRETE_PIX_GERADO_PREFIX = "lembrete_pix_gerado_user_"
 
+# <--- NOVO --->
+# Define o caminho do banco de dados. Para o Render, configure uma variável de ambiente
+# DB_PATH com o caminho do seu Persistent Disk (ex: /var/data/vip_bot.db)
+DB_PATH = os.environ.get('DB_PATH', 'vip_bot.db')
+
 
 def init_db():
-    with sqlite3.connect('vip_bot.db', timeout=10) as conn:
+    with sqlite3.connect(DB_PATH, timeout=10) as conn: # <--- ALTERADO
         cursor = conn.cursor()
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS usuarios_vip (
@@ -86,13 +94,49 @@ def init_db():
                 comprovante_enviado INTEGER DEFAULT 0, aprovado INTEGER DEFAULT 0
             )
         ''')
+        # <--- NOVO --->
+        # Tabela para persistir o estado da conversa do usuário.
+        # Isso evita que o progresso do usuário seja perdido se o bot reiniciar.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_sessions (
+                user_id INTEGER PRIMARY KEY,
+                state TEXT,
+                plano_selecionado TEXT,
+                last_update TEXT
+            )
+        ''')
         conn.commit()
+
+# <--- NOVAS FUNÇÕES --->
+# Funções auxiliares para gerenciar o estado do usuário no banco de dados.
+def set_user_state(user_id: int, state: str, plano_key: str = None):
+    """Salva ou atualiza o estado de um usuário no banco de dados."""
+    with sqlite3.connect(DB_PATH, timeout=10) as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT OR REPLACE INTO user_sessions (user_id, state, plano_selecionado, last_update)
+            VALUES (?, ?, ?, ?)
+        ''', (user_id, state, plano_key, datetime.now().isoformat()))
+        conn.commit()
+    logger.info(f"Estado do user {user_id} salvo no DB: {state}, Plano: {plano_key}")
+
+def get_user_state(user_id: int) -> dict:
+    """Recupera o estado de um usuário do banco de dados."""
+    with sqlite3.connect(DB_PATH, timeout=10) as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT state, plano_selecionado FROM user_sessions WHERE user_id = ?', (user_id,))
+        row = cursor.fetchone()
+        if row:
+            return {"state": row[0], "plano_selecionado": row[1]}
+        return {}
+
 
 def escape_markdown_v2(text: str) -> str:
     escape_chars = r'_*[]()~`>#+-=|{}.!'
     return "".join(f"\\{char}" if char in escape_chars else char for char in text)
 
 def remover_jobs_lembrete_anteriores(user_id: int, context: ContextTypes.DEFAULT_TYPE):
+    # O user_states agora é usado como um cache apenas para jobs
     if user_id in user_states and isinstance(user_states[user_id], dict) and 'pending_reminder_jobs' in user_states[user_id]:
         current_jobs = user_states[user_id].get('pending_reminder_jobs', [])
         if current_jobs:
@@ -107,9 +151,10 @@ def remover_jobs_lembrete_anteriores(user_id: int, context: ContextTypes.DEFAULT
                            "trigger has been changed" not in str(e_remove).lower() and \
                            "job has already been scheduled for removal" not in str(e_remove).lower() :
                             logger.warning(f"Erro inesperado ao tentar remover job {job_obj.name}: {e_remove}")
-        user_states[user_id]['pending_reminder_jobs'] = []
+            user_states[user_id]['pending_reminder_jobs'] = []
     elif user_id in user_states:
         logger.warning(f"Estrutura de user_states[{user_id}] inesperada ao tentar remover jobs: {user_states[user_id]}")
+
 
 async def deletar_ultima_mensagem_lembrete(user_id: int, chat_id: int, context: ContextTypes.DEFAULT_TYPE):
     """Deleta a última mensagem de lembrete enviada para o usuário, se houver."""
@@ -139,7 +184,8 @@ async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Dados incompletos no job de lembrete: {job.data} para user {user_id}")
         return
 
-    estado_atual_usuario_info = user_states.get(user_id, {})
+    # <--- ALTERADO ---> Busca o estado do DB
+    estado_atual_usuario_info = get_user_state(user_id)
     estado_atual_usuario = estado_atual_usuario_info.get("state")
 
     if estado_atual_usuario != estado_esperado_no_job:
@@ -148,13 +194,12 @@ async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
 
     logger.info(f"Executando lembrete {delay} para user {user_id} no contexto '{estado_esperado_no_job}'.")
     
-    # --- LÓGICA DE DELEÇÃO CENTRALIZADA ---
-    # Deleta a mensagem do lembrete anterior antes de enviar um novo.
     await deletar_ultima_mensagem_lembrete(user_id, chat_id, context)
 
     mensagem = ""
     keyboard_lembrete = None
     
+    # ... (lógica interna do callback_lembrete permanece a mesma) ...
     if estado_esperado_no_job == "aguardando_verificacao_idade":
         if delay == "1min_idade":
             mensagem = "Oi, amor\\! 😊 Notei que você ainda não confirmou sua idade\\. Para continuar e ter acesso a todas as surpresas que preparei, preciso dessa confirmação rapidinho\\! Clique abaixo se tiver 18 anos ou mais\\. 😉"
@@ -207,14 +252,13 @@ async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
             plano_nome_escapado = escape_markdown_v2(PLANOS[plano_key_lembrete]['nome'])
             
             if delay == "1min_pix":
-                mensagem = f"Amor, seu PIX para o *{plano_nome_escapado}* foi gerado\\! 🎉 Após pagar, **clique no botão '✅ Já Paguei' na mensagem acima** para me enviar o comprovante\\! Estou te esperando\\! 😉"
+                mensagem = f"Amor, seu PIX para o *{plano_nome_escapado}* foi gerado\\! 🎉 Após pagar, é só **me enviar a foto ou print do comprovante** aqui na conversa\\! Estou te esperando\\! 😉"
             elif delay == "5min_pix":
-                mensagem = f"Só um lembrete carinhoso, seu PIX para o *{plano_nome_escapado}* ainda está aguardando o pagamento\\. Assim que pagar, é só clicar no botão '✅ Já Paguei' lá em cima para enviar seu comprovante\\! 🔥"
+                mensagem = f"Só um lembrete carinhoso, seu PIX para o *{plano_nome_escapado}* ainda está aguardando o pagamento\\. Assim que pagar, é só me enviar seu comprovante\\! 🔥"
             elif delay == "10min_pix":
-                mensagem = f"Última chamada, amor\\! Seu acesso ao *{plano_nome_escapado}* está quase lá\\. Faça o pagamento e **clique no botão '✅ Já Paguei' na mensagem anterior** para não ficar de fora da diversão\\! 😈"
+                mensagem = f"Última chamada, amor\\! Seu acesso ao *{plano_nome_escapado}* está quase lá\\. Faça o pagamento e me envie o comprovante para não ficar de fora da diversão\\! 😈"
             
-            # Nenhum botão é criado aqui, a mensagem é apenas textual.
-            keyboard_lembrete = None
+            keyboard_lembrete = None # Apenas mensagem de texto
         else:
             logger.warning(f"Chave de plano inválida '{plano_key_lembrete}' no callback_lembrete para PIX gerado.")
             return
@@ -227,8 +271,7 @@ async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=keyboard_lembrete,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
-            # Armazena o ID da nova mensagem de lembrete no estado do usuário
-            # para que o PRÓXIMO lembrete possa deletá-la.
+            # Armazena o ID da nova mensagem de lembrete no cache em memória
             if user_id in user_states and isinstance(user_states[user_id], dict):
                 user_states[user_id]['last_reminder_message_id'] = sent_reminder_message.message_id
                 logger.info(f"Lembrete {delay} (MsgID: {sent_reminder_message.message_id}) enviado e ID armazenado para user {user_id}.")
@@ -245,14 +288,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     remover_jobs_lembrete_anteriores(user_id, context)
     
-    if user_id not in user_states or not isinstance(user_states.get(user_id), dict):
-        user_states[user_id] = {}
+    # <--- ALTERADO ---> Usa a função set_user_state
+    set_user_state(user_id, "aguardando_verificacao_idade")
+    # Inicia o cache de jobs para este usuário
+    user_states[user_id] = {"pending_reminder_jobs": [], "last_reminder_message_id": None}
     
-    user_states[user_id].update({
-        "state": "aguardando_verificacao_idade",
-        "pending_reminder_jobs": [],
-        "last_reminder_message_id": None
-    })
     logger.info(f"[START] User {user_id} iniciou. Estado definido para 'aguardando_verificacao_idade'.")
 
     keyboard = [
@@ -267,7 +307,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Você tem 18 anos ou mais?"
     )
     try:
-        # A mensagem inicial já é considerada um "lembrete" que será deletado pelo próximo.
         sent_message = await update.message.reply_text(
             texto_start,
             reply_markup=reply_markup,
@@ -276,7 +315,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user_id in user_states and isinstance(user_states[user_id], dict):
             user_states[user_id]['last_reminder_message_id'] = sent_message.message_id
             logger.info(f"[START] Mensagem inicial (MsgID: {sent_message.message_id}) enviada e ID armazenado para user {user_id}.")
-
     except Exception as e:
         logger.error(f"[START] Erro ao enviar mensagem inicial para user {user_id}: {e}", exc_info=True)
         return
@@ -284,29 +322,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     job_context_name_base = f"{JOB_LEMBRETE_IDADE_PREFIX}{user_id}"
     
     delays_lembrete = {"1min_idade": 1*60, "5min_idade": 5*60, "10min_idade": 10*60}
-
     jobs_agendados = []
     for delay_tag, delay_seconds in delays_lembrete.items():
-        job_data = {
-            "chat_id": chat_id,
-            "user_id": user_id,
-            "contexto_job": "aguardando_verificacao_idade",
-            "delay": delay_tag
-        }
+        job_data = { "chat_id": chat_id, "user_id": user_id, "contexto_job": "aguardando_verificacao_idade", "delay": delay_tag }
         job = context.application.job_queue.run_once(
-            callback_lembrete,
-            delay_seconds,
-            data=job_data,
-            name=f"{job_context_name_base}_{delay_tag}"
+            callback_lembrete, delay_seconds, data=job_data, name=f"{job_context_name_base}_{delay_tag}"
         )
         jobs_agendados.append(job)
     
     if user_id in user_states and isinstance(user_states[user_id], dict):
         user_states[user_id]['pending_reminder_jobs'] = jobs_agendados
-    else:
-        logger.warning(f"Estado para user {user_id} não era um dicionário ou não existia ao tentar armazenar jobs de lembrete. Cancelando.")
-        for job_obj in jobs_agendados:
-            if job_obj: job_obj.schedule_removal()
+
 
 async def handle_idade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -317,7 +343,6 @@ async def handle_idade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     remover_jobs_lembrete_anteriores(user_id, context)
-    # Limpa a chave de lembrete para não deletar a mensagem que estamos prestes a editar
     if user_id in user_states:
         user_states[user_id].pop('last_reminder_message_id', None)
 
@@ -332,11 +357,11 @@ async def handle_idade(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except telegram.error.BadRequest as e:
             logger.warning(f"Não foi possível editar mensagem 'idade_nao' para user {user_id}: {e}")
         
-        user_states[user_id] = {"state": "idade_recusada"}
+        set_user_state(user_id, "idade_recusada") # <--- ALTERADO
         return
     
     if query.data == "idade_ok":
-        user_states[user_id] = {"state": "idade_ok_proximo_passo"}
+        set_user_state(user_id, "idade_ok_proximo_passo") # <--- ALTERADO
         
         texto_boas_vindas = "🥰 Bom te ver por aqui\\.\\.\\."
         try:
@@ -347,18 +372,17 @@ async def handle_idade(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.error(f"Erro ao editar mensagem de boas_vindas para user {user_id}: {e}", exc_info=True)
         
         context.application.job_queue.run_once(
-            enviar_convite_vip_inicial,
-            1,
-            data={"chat_id": chat_id, "user_id": user_id},
-            name=f"convite_vip_inicial_{user_id}"
+            enviar_convite_vip_inicial, 1, data={"chat_id": chat_id, "user_id": user_id}, name=f"convite_vip_inicial_{user_id}"
         )
+
 
 async def enviar_convite_vip_inicial(context: ContextTypes.DEFAULT_TYPE):
     job_data = context.job.data
     chat_id = job_data["chat_id"]
     user_id = job_data["user_id"]
 
-    if user_states.get(user_id, {}).get("state") != "idade_ok_proximo_passo":
+    # <--- ALTERADO --->
+    if get_user_state(user_id).get("state") != "idade_ok_proximo_passo":
         logger.info(f"Envio do convite VIP inicial para user {user_id} cancelado (estado mudou).")
         return
 
@@ -368,12 +392,8 @@ async def enviar_convite_vip_inicial(context: ContextTypes.DEFAULT_TYPE):
     reply_markup_vip = InlineKeyboardMarkup(keyboard_vip)
 
     try:
-        # A mensagem de convite se torna a nova base para os próximos lembretes
         sent_message = await context.bot.send_message(
-            chat_id=chat_id,
-            text=texto_segunda_msg,
-            reply_markup=reply_markup_vip,
-            parse_mode=ParseMode.MARKDOWN_V2
+            chat_id=chat_id, text=texto_segunda_msg, reply_markup=reply_markup_vip, parse_mode=ParseMode.MARKDOWN_V2
         )
         if user_id in user_states:
              user_states[user_id]['last_reminder_message_id'] = sent_message.message_id
@@ -382,7 +402,7 @@ async def enviar_convite_vip_inicial(context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Erro ao enviar convite VIP inicial para user {user_id}: {e}", exc_info=True)
         return
     
-    user_states[user_id] = {"state": "convite_vip_enviado"}
+    set_user_state(user_id, "convite_vip_enviado") # <--- ALTERADO
 
 
 async def mostrar_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -395,7 +415,8 @@ async def mostrar_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id in user_states:
          user_states[user_id].pop('last_reminder_message_id', None)
 
-    user_states[user_id] = {"state": "visualizando_planos", "pending_reminder_jobs": []}
+    set_user_state(user_id, "visualizando_planos") # <--- ALTERADO
+    user_states[user_id] = {"pending_reminder_jobs": []} # <--- ALTERADO
 
     keyboard = [
         [InlineKeyboardButton(f"💎 {PLANOS['1_mes']['nome']} - {PLANOS['1_mes']['valor']}", callback_data="plano_1_mes")],
@@ -415,19 +436,13 @@ async def mostrar_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if query.message:
             await query.edit_message_text(
-                text=texto_planos,
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN_V2
+                text=texto_planos, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2
             )
-            # A mensagem editada se torna a base para os lembretes
             user_states[user_id]['last_reminder_message_id'] = query.message.message_id
             logger.info(f"Planos mostrados (editado MsgID: {query.message.message_id}) para user {user_id}")
         else: # Fallback raro
             sent_message = await context.bot.send_message(
-                chat_id=user_id,
-                text=texto_planos,
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN_V2
+                chat_id=user_id, text=texto_planos, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2
             )
             user_states[user_id]['last_reminder_message_id'] = sent_message.message_id
             logger.info(f"Planos mostrados (nova MsgID: {sent_message.message_id}) para user {user_id}")
@@ -444,22 +459,19 @@ async def mostrar_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Erro ao mostrar planos para user {user_id}: {e}", exc_info=True)
             return
 
+    # Agendamento de lembretes continua igual
     job_context_name_base = f"{JOB_LEMBRETE_PLANOS_PREFIX}{user_id}"
-    
     delays_lembrete = {"1min": 1*60, "5min": 5*60, "10min": 10*60}
-
     jobs_agendados = []
     for delay_tag, delay_seconds in delays_lembrete.items():
         job = context.application.job_queue.run_once(
-            callback_lembrete,
-            delay_seconds,
-            data={"chat_id": chat_id, "user_id": user_id, "contexto_job": "visualizando_planos", "delay": delay_tag},
-            name=f"{job_context_name_base}_{delay_tag}"
+            callback_lembrete, delay_seconds, data={"chat_id": chat_id, "user_id": user_id, "contexto_job": "visualizando_planos", "delay": delay_tag}, name=f"{job_context_name_base}_{delay_tag}"
         )
         jobs_agendados.append(job)
     
     if user_id in user_states and isinstance(user_states[user_id], dict):
         user_states[user_id]['pending_reminder_jobs'] = jobs_agendados
+
 
 async def detalhes_plano(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -479,7 +491,8 @@ async def detalhes_plano(update: Update, context: ContextTypes.DEFAULT_TYPE):
     plano = PLANOS[plano_key]
     
     estado_visualizando_detalhes = f"visualizando_detalhes_{plano_key}"
-    user_states[user_id] = {"state": estado_visualizando_detalhes, "plano_selecionado": plano_key, "pending_reminder_jobs": []}
+    set_user_state(user_id, estado_visualizando_detalhes, plano_key) # <--- ALTERADO
+    user_states[user_id] = {"pending_reminder_jobs": []} # <--- ALTERADO
     
     keyboard = [
         [InlineKeyboardButton("💳 Gerar PIX", callback_data=f"gerar_pix_{plano_key}")],
@@ -487,6 +500,7 @@ async def detalhes_plano(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
+    # ... (lógica de texto e envio de mensagem permanece igual) ...
     nome_plano_escapado = escape_markdown_v2(plano['nome'])
     valor_plano_escapado = escape_markdown_v2(plano['valor'])
     dias_plano_escapado = escape_markdown_v2(str(plano['dias']))
@@ -520,21 +534,17 @@ async def detalhes_plano(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     job_context_name_base = f"{JOB_LEMBRETE_DETALHES_PREFIX}{user_id}_{plano_key}"
-    
     delays_lembrete = {"1min": 1*60, "5min": 5*60, "10min": 10*60}
-
     jobs_agendados = []
     for delay_tag, delay_seconds in delays_lembrete.items():
         job = context.application.job_queue.run_once(
-            callback_lembrete,
-            delay_seconds,
-            data={"chat_id": chat_id, "user_id": user_id, "contexto_job": estado_visualizando_detalhes, "delay": delay_tag, "plano_key": plano_key},
-            name=f"{job_context_name_base}_{delay_tag}"
+            callback_lembrete, delay_seconds, data={"chat_id": chat_id, "user_id": user_id, "contexto_job": estado_visualizando_detalhes, "delay": delay_tag, "plano_key": plano_key}, name=f"{job_context_name_base}_{delay_tag}"
         )
         jobs_agendados.append(job)
     
     if user_id in user_states and isinstance(user_states[user_id], dict):
         user_states[user_id]['pending_reminder_jobs'] = jobs_agendados
+
 
 async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -543,33 +553,32 @@ async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     remover_jobs_lembrete_anteriores(user_id, context)
-    # A cadeia de lembretes de PIX é separada, então resetamos o ID.
-    # A mensagem principal do PIX não será deletada pelos lembretes.
     if user_id in user_states:
-         user_states[user_id]['last_reminder_message_id'] = None
+        user_states[user_id]['last_reminder_message_id'] = None
 
     plano_key = query.data.replace("gerar_pix_", "")
     if plano_key not in PLANOS or plano_key not in LINKS_PIX:
         logger.error(f"Chave de plano inválida '{plano_key}' em gerar_pix.")
         await query.edit_message_text(escape_markdown_v2("❌ Ops! Algo deu errado ao gerar o PIX. Tente novamente."), parse_mode=ParseMode.MARKDOWN_V2)
         return
-        
+    
     estado_pix_gerado = f"gerou_pix_{plano_key}"
-    user_states[user_id] = {"state": estado_pix_gerado, "plano_selecionado": plano_key, "pending_reminder_jobs": []}
+    set_user_state(user_id, estado_pix_gerado, plano_key) # <--- ALTERADO
+    user_states[user_id] = {"pending_reminder_jobs": []} # <--- ALTERADO
     
     plano = PLANOS[plano_key]
     pix_code = LINKS_PIX[plano_key]
     username = query.from_user.username or "Não informado"
-    with sqlite3.connect('vip_bot.db', timeout=10) as conn:
+    with sqlite3.connect(DB_PATH, timeout=10) as conn: # <--- ALTERADO
         cursor = conn.cursor()
         cursor.execute('''
             INSERT INTO pagamentos_pendentes (user_id, username, plano, valor, data_solicitacao)
             VALUES (?, ?, ?, ?, ?)
         ''', (user_id, username, plano_key, plano['valor'], datetime.now().isoformat()))
         conn.commit()
-        
+    
+    # <--- ALTERADO ---> Botão 'Já paguei' removido.
     keyboard = [
-        [InlineKeyboardButton("✅ Já Paguei - Enviar Comprovante", callback_data=f"ja_paguei_{plano_key}")],
         [InlineKeyboardButton("⬅️ Voltar", callback_data=f"plano_{plano_key}")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -577,6 +586,7 @@ async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nome_plano_escapado = escape_markdown_v2(plano['nome'])
     valor_plano_escapado = escape_markdown_v2(plano['valor'])
 
+    # <--- ALTERADO ---> Texto de instrução simplificado.
     texto_gerar_pix = (
         f"💳 *PIX para Pagamento \\- {nome_plano_escapado}*\n\n"
         f"💰 Valor: *{valor_plano_escapado}*\n\n"
@@ -586,7 +596,7 @@ async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"1️⃣ **Toque no código PIX acima** para copiar\\.\n"
         f"2️⃣ Abra seu app bancário e escolha a opção *PIX Copia e Cola*\\.\n"
         f"3️⃣ Cole o código e confirme o pagamento\\.\n"
-        f"4️⃣ Após pagar, clique em *'Já Paguei'* para me enviar o comprovante\\.\n\n"
+        f"4️⃣ Após pagar, **basta me enviar a foto ou print do comprovante aqui mesmo nesta conversa**\\.\n\n"
         f"💕 Estou ansiosa para te receber no meu VIP, amor\\!"
     )
     await query.edit_message_text(
@@ -595,95 +605,59 @@ async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.MARKDOWN_V2
     )
     
-    admin_notify_text = (
-        f"🔔 *NOVA SOLICITAÇÃO DE PAGAMENTO*\n\n"
-        f"👤 Usuário: @{escape_markdown_v2(username)} \\(ID: {user_id}\\)\n"
-        f"💎 Plano: {nome_plano_escapado}\n"
-        f"💰 Valor: {valor_plano_escapado}\n"
-        f"⏰ Horário: {escape_markdown_v2(datetime.now().strftime('%d/%m/%Y %H:%M'))}"
-    )
-    await context.bot.send_message(
-        chat_id=ADMIN_ID,
-        text=admin_notify_text,
-        parse_mode=ParseMode.MARKDOWN_V2
-    )
+    # <--- REMOVIDO ---> A notificação ao admin foi movida para quando o comprovante é recebido.
     
+    # Agendamento de lembretes para pagar o PIX continua igual.
     job_context_name_base = f"{JOB_LEMBRETE_PIX_GERADO_PREFIX}{user_id}_{plano_key}"
     delays_lembrete = {"1min_pix": 1*60, "5min_pix": 5*60, "10min_pix": 10*60}
-
     jobs_agendados = []
     for delay_tag, delay_seconds in delays_lembrete.items():
         job = context.application.job_queue.run_once(
-            callback_lembrete,
-            delay_seconds,
-            data={"chat_id": chat_id, "user_id": user_id, "contexto_job": estado_pix_gerado, "delay": delay_tag, "plano_key": plano_key},
-            name=f"{job_context_name_base}_{delay_tag}"
+            callback_lembrete, delay_seconds, data={"chat_id": chat_id, "user_id": user_id, "contexto_job": estado_pix_gerado, "delay": delay_tag, "plano_key": plano_key}, name=f"{job_context_name_base}_{delay_tag}"
         )
         jobs_agendados.append(job)
     
     if user_id in user_states and isinstance(user_states[user_id], dict):
         user_states[user_id]['pending_reminder_jobs'] = jobs_agendados
 
-async def ja_paguei(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = query.from_user.id
-    chat_id = query.message.chat_id
-    await query.answer()
-    
-    remover_jobs_lembrete_anteriores(user_id, context)
-    # Limpa qualquer lembrete de texto que ainda esteja na tela
-    await deletar_ultima_mensagem_lembrete(user_id, chat_id, context)
+# <--- REMOVIDO --->
+# A função ja_paguei não é mais necessária, pois o fluxo foi simplificado.
+# async def ja_paguei(...)
 
-    plano_key = query.data.replace("ja_paguei_", "")
-    user_states[user_id] = {"state": "aguardando_comprovante", "plano_key_comprovante": plano_key, "pending_reminder_jobs": []}
-    
-    texto_ja_paguei = (
-        "📎 *Envio de Comprovante*\n\n"
-        "Perfeito, amor\\! Agora preciso do seu comprovante de pagamento para liberar seu acesso ao meu VIP\\.\n\n"
-        "📸 *Como me enviar:*\n"
-        "Envie diretamente nesta conversa a foto ou screenshot do seu comprovante\\.\n\n"
-        "Pode ser:\n"
-        "• Screenshot da tela de confirmação\n"
-        "• Foto do comprovante\n"
-        "• Print do extrato\n\n"
-        "✅ Assim que eu verificar, vou liberar seu acesso imediatamente\\!\n\n"
-        "💕 Obrigada pela confiança, amor\\!"
-    )
-    await query.edit_message_text(
-        texto_ja_paguei,
-        parse_mode=ParseMode.MARKDOWN_V2
-    )
 
-# --- O restante do seu código permanece o mesmo ---
-# (As funções de receber_comprovante, admin, etc. não precisam de alteração para essa lógica)
-
+# <--- FUNÇÃO TOTALMENTE REFEITA --->
 async def receber_comprovante(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     username = update.effective_user.username or "Não informado"
     
-    user_state_info = user_states.get(user_id, {})
+    user_state_info = get_user_state(user_id) # Usa a nova função
     current_state = user_state_info.get("state")
     
-    if current_state == "aguardando_comprovante":
-        remover_jobs_lembrete_anteriores(user_id, context)
-        plano_key = user_state_info.get("plano_key_comprovante")
-
+    # Lógica principal: verifica se o usuário estava na etapa de enviar comprovante
+    if current_state and current_state.startswith("gerou_pix_"):
+        plano_key = current_state.replace("gerou_pix_", "")
+        
         if not plano_key or plano_key not in PLANOS:
             await update.message.reply_text(escape_markdown_v2("❌ Erro: Não consegui identificar o plano do seu pagamento. Por favor, contate o suporte."), parse_mode=ParseMode.MARKDOWN_V2)
             return
 
+        logger.info(f"User {user_id} enviou comprovante para o plano {plano_key}.")
+        
+        remover_jobs_lembrete_anteriores(user_id, context)
+        set_user_state(user_id, "comprovante_enviado_admin")
         plano = PLANOS[plano_key]
-        with sqlite3.connect('vip_bot.db', timeout=10) as conn:
+
+        # Atualiza o DB para constar que o comprovante foi enviado
+        with sqlite3.connect(DB_PATH, timeout=10) as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 UPDATE pagamentos_pendentes SET comprovante_enviado = 1
-                WHERE user_id = ? AND plano = ? AND aprovado = 0 AND comprovante_enviado = 0
+                WHERE user_id = ? AND plano = ? AND aprovado = 0
                 ORDER BY id DESC LIMIT 1
             ''', (user_id, plano_key))
             conn.commit()
 
-        user_states[user_id] = {"state": "comprovante_enviado_admin"}
-
+        # Envia confirmação para o usuário
         await update.message.reply_text(
             "✅ *Comprovante Recebido\\!*\n\n"
             "Perfeito, amor\\! Recebi seu comprovante e vou verificar agora mesmo\\.\n\n"
@@ -692,11 +666,12 @@ async def receber_comprovante(update: Update, context: ContextTypes.DEFAULT_TYPE
             parse_mode=ParseMode.MARKDOWN_V2
         )
         
-        keyboard = [
+        # AGORA SIM: Notifica o admin com o comprovante e os botões
+        keyboard_admin = [
             [InlineKeyboardButton("✅ Aprovar Acesso", callback_data=f"aprovar_{user_id}_{plano_key}")],
             [InlineKeyboardButton("❌ Rejeitar", callback_data=f"rejeitar_{user_id}_{plano_key}")]
         ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        reply_markup_admin = InlineKeyboardMarkup(keyboard_admin)
         
         caption_text_admin = (
             f"📎 *COMPROVANTE RECEBIDO*\n\n"
@@ -706,40 +681,39 @@ async def receber_comprovante(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"⏰ Horário: {escape_markdown_v2(datetime.now().strftime('%d/%m/%Y %H:%M'))}\n\n"
             f"Clique em uma das opções abaixo:"
         )
+
         if update.message.photo:
             await context.bot.send_photo(
                 chat_id=ADMIN_ID, photo=update.message.photo[-1].file_id,
-                caption=caption_text_admin, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2
+                caption=caption_text_admin, reply_markup=reply_markup_admin, parse_mode=ParseMode.MARKDOWN_V2
             )
         elif update.message.document:
             await context.bot.send_document(
                 chat_id=ADMIN_ID, document=update.message.document.file_id,
-                caption=caption_text_admin, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2
+                caption=caption_text_admin, reply_markup=reply_markup_admin, parse_mode=ParseMode.MARKDOWN_V2
             )
-    
-    elif current_state and current_state.startswith("gerou_pix_"):
-        plano_key = current_state.replace("gerou_pix_", "")
-        texto_orientacao = (
-            "Oi, amor\\! Vi que você me enviou uma imagem, deve ser o seu comprovante, né? 🥰\n\n"
-            "Para que eu possa registrar direitinho, por favor, clique primeiro no botão *\"✅ Já Paguei \\- Enviar Comprovante\"* na mensagem anterior, e *depois* me envie esta imagem novamente\\.\n\n"
-            "Assim garantimos que seu acesso VIP seja liberado sem problemas\\! 😉"
-        )
-        keyboard = [
-            [InlineKeyboardButton("✅ Já Paguei - Enviar Comprovante", callback_data=f"ja_paguei_{plano_key}")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text(
-            texto_orientacao,
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN_V2
-        )
-    
     else:
         logger.info(f"User {user_id} enviou uma foto/documento fora de contexto (estado: {current_state}). Ignorando.")
 
-async def processar_aprovacao(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+# <--- NOVA FUNÇÃO --->
+# Guia o usuário que envia texto quando deveria enviar uma imagem.
+async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_state_info = get_user_state(user_id)
+    current_state = user_state_info.get("state")
+
+    if current_state and current_state.startswith("gerou_pix_"):
+        await update.message.reply_text(
+            "Oi, amor\\! Vi que você me mandou uma mensagem\\. 😊\n\n"
+            "Para eu confirmar seu pagamento, preciso que você me envie a **FOTO** ou o **PRINT** do comprovante aqui na conversa, ok\\? \n\n"
+            "Estou no aguardo\\! 💕",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+
+# <--- FUNÇÃO REFEITA E RENOMEADA PARA MAIOR CLAREZA --->
+async def processar_decisao_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    admin_user_id = query.from_user.id
     await query.answer()
 
     data_parts = query.data.split("_")
@@ -751,23 +725,19 @@ async def processar_aprovacao(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.edit_message_caption(caption=escape_markdown_v2(f"❌ Erro ao processar callback: dados inválidos. ({query.data})"), parse_mode=ParseMode.MARKDOWN_V2)
         return
     
-    remover_jobs_lembrete_anteriores(user_id_pagante, context)
-    if user_id_pagante in user_states and isinstance(user_states[user_id_pagante], dict):
-        user_states[user_id_pagante]["state"] = f"pagamento_{acao}"
-    else:
-        user_states[user_id_pagante] = {"state": f"pagamento_{acao}", "pending_reminder_jobs": []}
-
-
     plano_key = "_".join(data_parts[2:])
-    if plano_key not in PLANOS:
-        logger.error(f"Plano '{plano_key}' não encontrado ao processar aprovação para user {user_id_pagante}.")
-        await query.edit_message_caption(
-            caption=escape_markdown_v2(f"❌ Erro: Plano '{plano_key}' não encontrado para usuário {user_id_pagante}."), parse_mode=ParseMode.MARKDOWN_V2
-        )
-        return
-    plano = PLANOS[plano_key]
 
     if acao == "aprovar":
+        # A lógica de aprovação é a mesma de antes.
+        remover_jobs_lembrete_anteriores(user_id_pagante, context)
+        set_user_state(user_id_pagante, "pagamento_aprovado")
+        
+        if plano_key not in PLANOS:
+            logger.error(f"Plano '{plano_key}' não encontrado ao aprovar para user {user_id_pagante}.")
+            await query.edit_message_caption(caption=escape_markdown_v2(f"❌ Erro: Plano '{plano_key}' inválido."), parse_mode=ParseMode.MARKDOWN_V2)
+            return
+        plano = PLANOS[plano_key]
+
         try:
             link_convite = await context.bot.create_chat_invite_link(
                 chat_id=CANAL_VIP_ID, member_limit=1, expire_date=int(time.time()) + (7 * 24 * 60 * 60)
@@ -780,7 +750,7 @@ async def processar_aprovacao(update: Update, context: ContextTypes.DEFAULT_TYPE
             except Exception as e_user:
                 logger.warning(f"Não foi possível obter username para {user_id_pagante} ao aprovar: {e_user}")
 
-            with sqlite3.connect('vip_bot.db', timeout=10) as conn:
+            with sqlite3.connect(DB_PATH, timeout=10) as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     INSERT OR REPLACE INTO usuarios_vip (user_id, username, plano, data_entrada, data_expiracao, ativo)
@@ -792,6 +762,7 @@ async def processar_aprovacao(update: Update, context: ContextTypes.DEFAULT_TYPE
                 ''', (user_id_pagante, plano_key))
                 conn.commit()
             
+            # ... (Lógica de mensagens de aprovação para usuário e admin permanece a mesma) ...
             link_esc = escape_markdown_v2(link_convite.invite_link)
             plano_nome_esc = escape_markdown_v2(plano['nome'])
             data_exp_user_esc = escape_markdown_v2(data_expiracao.strftime('%d/%m/%Y'))
@@ -827,44 +798,100 @@ async def processar_aprovacao(update: Update, context: ContextTypes.DEFAULT_TYPE
                 f"📅 Expira em: {data_exp_admin_esc}"
             )
             await query.edit_message_caption(caption=caption_para_admin, parse_mode=ParseMode.MARKDOWN_V2)
-            
-        except telegram.error.TelegramError as te:
-            logger.error(f"Erro Telegram ao aprovar acesso para {user_id_pagante}: {te}")
-            await query.edit_message_caption(caption=escape_markdown_v2(f"❌ Erro Telegram ao aprovar acesso: {te}"), parse_mode=ParseMode.MARKDOWN_V2)
+
         except Exception as e:
             logger.error(f"Erro geral ao aprovar acesso para {user_id_pagante}: {e}", exc_info=True)
             await query.edit_message_caption(caption=escape_markdown_v2(f"❌ Erro geral ao aprovar acesso: {e}"), parse_mode=ParseMode.MARKDOWN_V2)
-            
+    
     elif acao == "rejeitar":
-        with sqlite3.connect('vip_bot.db', timeout=10) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                DELETE FROM pagamentos_pendentes
-                WHERE user_id = ? AND plano = ? AND comprovante_enviado = 1 AND aprovado = 0 ORDER BY id DESC LIMIT 1
-            ''', (user_id_pagante, plano_key))
-            conn.commit()
-        
-        texto_rejeicao_user = (
-            "❌ *Pagamento não aprovado*\n\n"
-            "Infelizmente não consegui confirmar seu pagamento, amor\\.\n\n"
-            "💬 Entre em contato comigo para resolvermos esta questão\\.\n"
-            "🔄 Ou tente fazer um novo pagamento\\."
-        )
-        await context.bot.send_message(chat_id=user_id_pagante, text=texto_rejeicao_user, parse_mode=ParseMode.MARKDOWN_V2)
-        
-        plano_nome_escapado = escape_markdown_v2(plano['nome'])
-        horario_rejeicao_escapado = escape_markdown_v2(datetime.now().strftime('%d/%m/%Y %H:%M'))
-        caption_rejeicao_admin = (
-            f"❌ *ACESSO REJEITADO*\n\n"
-            f"👤 Usuário: ID {user_id_pagante}\n"
-            f"💎 Plano: {plano_nome_escapado}\n"
-            f"⏰ Rejeitado em: {horario_rejeicao_escapado}"
-        )
-        await query.edit_message_caption(caption=caption_rejeicao_admin, parse_mode=ParseMode.MARKDOWN_V2)
+        # Agora, 'rejeitar' apenas mostra o menu de opções para o admin.
+        keyboard_rejeicao = [
+            [InlineKeyboardButton("🖼️ Comprovante Inválido/Errado", callback_data=f"motivo_invalido_{user_id_pagante}_{plano_key}")],
+            [InlineKeyboardButton("🚫 Suspeita de Fraude", callback_data=f"motivo_fraude_{user_id_pagante}_{plano_key}")],
+            [InlineKeyboardButton("🔙 Cancelar Ação", callback_data=f"motivo_cancelar_{user_id_pagante}_{plano_key}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard_rejeicao)
 
+        # Adiciona o texto ao caption existente sem apagar o original
+        original_caption = query.message.caption_markdown_v2
+        await query.edit_message_caption(
+            caption=f"{original_caption}\n\n⚠️ *Por favor, selecione o motivo da rejeição:*",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+
+# <--- NOVA FUNÇÃO --->
+# Processa a escolha do admin no menu de rejeição
+async def processar_motivo_rejeicao(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    data_parts = query.data.split("_")
+    motivo = data_parts[1]
+    user_id_pagante = int(data_parts[2])
+    plano_key = "_".join(data_parts[3:])
+    
+    if plano_key not in PLANOS:
+        logger.error(f"Plano '{plano_key}' inválido na rejeição para user {user_id_pagante}.")
+        await query.edit_message_caption(caption=f"❌ Erro: Plano '{plano_key}' inválido.", parse_mode=ParseMode.MARKDOWN_V2)
+        return
+
+    plano = PLANOS[plano_key]
+    # Tenta pegar o username do caption original da mensagem
+    original_caption = query.message.caption_markdown_v2
+    
+    if motivo == "invalido":
+        set_user_state(user_id_pagante, f"gerou_pix_{plano_key}", plano_key)
+        logger.info(f"Admin rejeitou comprovante de {user_id_pagante} como 'inválido'. Usuário notificado para reenviar.")
+
+        texto_para_usuario = (
+            "Oi, amor\\! 💕\n\nNotei que houve um probleminha com o comprovante que você enviou\\. "
+            "Talvez você tenha anexado a imagem errada por engano, acontece\\! 😊\n\n"
+            "Por favor, verifique se está enviando o comprovante de pagamento correto para o seu plano VIP e **me envie a imagem certa novamente aqui na conversa**\\.\n\n"
+            "Estou no aguardo para liberar seu acesso\\! 😉"
+        )
+        try:
+            await context.bot.send_message(chat_id=user_id_pagante, text=texto_para_usuario, parse_mode=ParseMode.MARKDOWN_V2)
+        except Exception as e:
+            logger.error(f"Falha ao notificar user {user_id_pagante} sobre comprovante inválido: {e}")
+
+        caption_para_admin = f"⚠️ *AÇÃO NECESSÁRIA*\n\n{original_caption.splitlines()[2]}\n\nO comprovante foi marcado como *Inválido* e o usuário foi instruído a enviar um novo\\. Aguardando nova submissão\\."
+        await query.edit_message_caption(caption=caption_para_admin, parse_mode=ParseMode.MARKDOWN_V2)
+
+    elif motivo == "fraude":
+        logger.warning(f"Admin rejeitou comprovante de {user_id_pagante} como 'fraude'. Removendo registro.")
+        set_user_state(user_id_pagante, "pagamento_rejeitado_fraude")
+
+        with sqlite3.connect(DB_PATH, timeout=10) as conn:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM pagamentos_pendentes WHERE user_id = ? AND plano = ? AND aprovado = 0 ORDER BY id DESC LIMIT 1', (user_id_pagante, plano_key))
+            conn.commit()
+
+        await context.bot.send_message(
+            chat_id=user_id_pagante,
+            text="❌ *Pagamento não confirmado*\\.\n\nNão foi possível verificar a autenticidade do seu pagamento\\. Por favor, entre em contato com o suporte para mais informações\\.",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        
+        caption_para_admin = f"🚫 *ACESSO REJEITADO (FRAUDE)*\n\n{original_caption.splitlines()[2]}\n\nO registro de pagamento pendente foi removido\\."
+        await query.edit_message_caption(caption=caption_para_admin, parse_mode=ParseMode.MARKDOWN_V2)
+
+    elif motivo == "cancelar":
+        # Edita a mensagem de volta ao estado original, removendo o menu de rejeição
+        await query.edit_message_caption(
+            caption=original_caption,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Aprovar Acesso", callback_data=f"aprovar_{user_id_pagante}_{plano_key}")],
+                [InlineKeyboardButton("❌ Rejeitar", callback_data=f"rejeitar_{user_id_pagante}_{plano_key}")]
+            ]),
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+
+# --- O restante do código (comandos de admin, jobs, keep-alive) permanece o mesmo ---
+# ... (listar_usuarios, remover_usuarios_expirados_job, remover_usuario, etc.) ...
 async def listar_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
-    with sqlite3.connect('vip_bot.db', timeout=10) as conn:
+    with sqlite3.connect(DB_PATH, timeout=10) as conn:
         cursor = conn.cursor()
         cursor.execute('SELECT user_id, username, plano, data_expiracao FROM usuarios_vip WHERE ativo = 1 ORDER BY data_expiracao')
         usuarios = cursor.fetchall()
@@ -904,7 +931,7 @@ async def listar_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def remover_usuarios_expirados_job(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Executando job de remoção de usuários expirados...")
-    with sqlite3.connect('vip_bot.db', timeout=10) as conn:
+    with sqlite3.connect(DB_PATH, timeout=10) as conn:
         cursor = conn.cursor()
         cursor.execute('''
             SELECT user_id, username FROM usuarios_vip WHERE ativo = 1 AND data_expiracao < ?
@@ -956,7 +983,7 @@ async def remover_usuario(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ ID inválido\\. Deve ser um número\\.", parse_mode=ParseMode.MARKDOWN_V2)
         return
 
-    with sqlite3.connect('vip_bot.db', timeout=10) as conn:
+    with sqlite3.connect(DB_PATH, timeout=10) as conn:
         cursor = conn.cursor()
         cursor.execute('SELECT 1 FROM usuarios_vip WHERE user_id = ? AND ativo = 1', (user_id_remover,))
         if not cursor.fetchone():
@@ -989,7 +1016,7 @@ async def remover_usuario(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(escape_markdown_v2(f"⚠️ Erro geral ao remover: {e}"), parse_mode=ParseMode.MARKDOWN_V2)
 
 async def verificar_usuario_autorizado(user_id_verificar):
-    with sqlite3.connect('vip_bot.db', timeout=10) as conn:
+    with sqlite3.connect(DB_PATH, timeout=10) as conn:
         cursor = conn.cursor()
         cursor.execute('SELECT 1 FROM usuarios_vip WHERE user_id = ? AND ativo = 1 AND data_expiracao >= ?',
                        (user_id_verificar, datetime.now().isoformat()))
@@ -1083,18 +1110,24 @@ def configure_application():
     
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
+    # Comandos
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("usuarios", listar_usuarios))
     application.add_handler(CommandHandler("remover", remover_usuario))
     
+    # Callback Queries (Botões)
     application.add_handler(CallbackQueryHandler(handle_idade, pattern="^idade_"))
     application.add_handler(CallbackQueryHandler(mostrar_planos, pattern="^ver_planos$"))
     application.add_handler(CallbackQueryHandler(detalhes_plano, pattern="^plano_"))
     application.add_handler(CallbackQueryHandler(gerar_pix, pattern="^gerar_pix_"))
-    application.add_handler(CallbackQueryHandler(ja_paguei, pattern="^ja_paguei_"))
-    application.add_handler(CallbackQueryHandler(processar_aprovacao, pattern="^(aprovar|rejeitar)_"))
+    application.add_handler(CallbackQueryHandler(processar_decisao_admin, pattern="^(aprovar|rejeitar)_")) # <--- ALTERADO
+    application.add_handler(CallbackQueryHandler(processar_motivo_rejeicao, pattern="^motivo_")) # <--- NOVO
     
+    # Message Handlers
     application.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, receber_comprovante))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages)) # <--- NOVO
+    
+    # Outros Handlers
     application.add_handler(ChatMemberHandler(verificar_novo_membro, ChatMemberHandler.CHAT_MEMBER))
     
     job_queue = application.job_queue
@@ -1115,6 +1148,7 @@ def configure_application():
             
     return application
 
+# ... (Resto do código de inicialização async, error handler, etc. permanece igual) ...
 async def pre_run_bot_operations(application: Application):
     logger.info("Executando operações de pré-inicialização do bot (async)...")
     
