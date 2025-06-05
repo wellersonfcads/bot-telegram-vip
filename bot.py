@@ -574,8 +574,9 @@ async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
             VALUES (?, ?, ?, ?, ?)
         ''', (user_id, username, plano_key, plano['valor'], datetime.now().isoformat()))
         conn.commit()
+        
+    # BOTÃO "Copiar PIX" REMOVIDO DAQUI
     keyboard = [
-        [InlineKeyboardButton("📋 Copiar PIX", callback_data=f"copiar_pix_{plano_key}")],
         [InlineKeyboardButton("✅ Já Paguei - Enviar Comprovante", callback_data=f"ja_paguei_{plano_key}")],
         [InlineKeyboardButton("⬅️ Voltar", callback_data=f"plano_{plano_key}")]
     ]
@@ -584,16 +585,17 @@ async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nome_plano_escapado = escape_markdown_v2(plano['nome'])
     valor_plano_escapado = escape_markdown_v2(plano['valor'])
 
+    # TEXTO DE INSTRUÇÃO MELHORADO
     texto_gerar_pix = (
         f"💳 *PIX para Pagamento \\- {nome_plano_escapado}*\n\n"
         f"💰 Valor: *{valor_plano_escapado}*\n\n"
-        f"📋 *Código PIX \\(Copia e Cola\\):*\n"
+        f"📋 *Toque no código abaixo para Copiar:*\n"
         f"`{pix_code}`\n\n"
         f"📱 *Como pagar:*\n"
-        f"1️⃣ Clique em 'Copiar PIX' abaixo\\.\n"
-        f"2️⃣ Abra seu app bancário e escolha PIX \\> Copia e Cola\\.\n"
+        f"1️⃣ **Toque no código PIX acima** para copiar\\.\n"
+        f"2️⃣ Abra seu app bancário e escolha a opção *PIX Copia e Cola*\\.\n"
         f"3️⃣ Cole o código e confirme o pagamento\\.\n"
-        f"4️⃣ Após pagar, clique em 'Já Paguei \\- Enviar Comprovante' para me enviar a foto do comprovante\\.\n\n"
+        f"4️⃣ Após pagar, clique em *'Já Paguei'* para me enviar o comprovante\\.\n\n"
         f"💕 Estou ansiosa para te receber no meu VIP, amor\\!"
     )
     await query.edit_message_text(
@@ -635,9 +637,7 @@ async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for job_obj in jobs_agendados:
             if job_obj: job_obj.schedule_removal()
 
-async def copiar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer("PIX copiado! 📋\nCole no seu app bancário na opção PIX > Copia e Cola", show_alert=True)
+# A FUNÇÃO copiar_pix FOI REMOVIDA POIS NÃO É MAIS NECESSÁRIA
 
 async def ja_paguei(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1100,7 +1100,7 @@ def configure_application():
     application.add_handler(CallbackQueryHandler(mostrar_planos, pattern="^ver_planos$"))
     application.add_handler(CallbackQueryHandler(detalhes_plano, pattern="^plano_"))
     application.add_handler(CallbackQueryHandler(gerar_pix, pattern="^gerar_pix_"))
-    application.add_handler(CallbackQueryHandler(copiar_pix, pattern="^copiar_pix_"))
+    # O handler para copiar_pix foi removido
     application.add_handler(CallbackQueryHandler(ja_paguei, pattern="^ja_paguei_"))
     application.add_handler(CallbackQueryHandler(processar_aprovacao, pattern="^(aprovar|rejeitar)_"))
     
