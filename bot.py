@@ -66,7 +66,7 @@ user_states = {}
 JOB_LEMBRETE_IDADE_PREFIX = "lembrete_idade_user_"
 JOB_LEMBRETE_PLANOS_PREFIX = "lembrete_planos_user_"
 JOB_LEMBRETE_DETALHES_PREFIX = "lembrete_detalhes_user_"
-JOB_LEMBRETE_PIX_GERADO_PREFIX = "lembrete_pix_gerado_user_" # NOVO PREFIXO
+JOB_LEMBRETE_PIX_GERADO_PREFIX = "lembrete_pix_gerado_user_" 
 
 
 def init_db():
@@ -105,11 +105,10 @@ def remover_jobs_lembrete_anteriores(user_id: int, context: ContextTypes.DEFAULT
                            "Job has already been removed" not in str(e_remove).lower() and \
                            "trigger has been changed" not in str(e_remove).lower() and \
                            "job has already been scheduled for removal" not in str(e_remove).lower() :
-                            logger.error(f"Erro inesperado ao tentar remover job {job_obj.name}: {e_remove}")
+                            logger.warning(f"Erro inesperado ao tentar remover job {job_obj.name}: {e_remove}")
             user_states[user_id]['pending_reminder_jobs'] = [] 
     elif user_id in user_states:
         logger.warning(f"Estrutura de user_states[{user_id}] inesperada ao tentar remover jobs: {user_states[user_id]}")
-
 
 async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
@@ -121,7 +120,7 @@ async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
     user_id = job.data.get("user_id")
     estado_esperado_no_job = job.data.get("contexto_job") 
     delay = job.data.get("delay")
-    plano_key_lembrete = job.data.get("plano_key") # Usado para detalhes e pix gerado
+    plano_key_lembrete = job.data.get("plano_key")
 
     if not all([chat_id, user_id, estado_esperado_no_job, delay]):
         logger.error(f"Dados incompletos no job de lembrete: {job.data} para user {user_id}")
@@ -186,7 +185,7 @@ async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"Chave de plano inválida '{plano_key_lembrete}' no callback_lembrete para detalhes.")
             return
             
-    elif estado_esperado_no_job.startswith("gerou_pix_"): # NOVO BLOCO PARA PIX GERADO
+    elif estado_esperado_no_job.startswith("gerou_pix_"):
         if plano_key_lembrete and plano_key_lembrete in PLANOS:
             plano_nome_escapado = escape_markdown_v2(PLANOS[plano_key_lembrete]['nome'])
             if delay == "1min_pix":
@@ -197,16 +196,13 @@ async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
                 mensagem = f"Última chamada, amor\\! Seu acesso ao *{plano_nome_escapado}* está quase lá\\. Faça o pagamento do PIX e me envie o comprovante para não ficar de fora da diversão\\! 😈"
             
             if mensagem:
-                # Botões para facilitar o envio do comprovante ou ver o PIX novamente
                 keyboard_lembrete = InlineKeyboardMarkup([
                     [InlineKeyboardButton("✅ Já Paguei - Enviar Comprovante", callback_data=f"ja_paguei_{plano_key_lembrete}")],
                     [InlineKeyboardButton("📋 Ver PIX Novamente", callback_data=f"gerar_pix_{plano_key_lembrete}")] 
-                    # O callback "gerar_pix_" irá reenviar a mensagem com o código PIX
                 ])
         else:
             logger.warning(f"Chave de plano inválida '{plano_key_lembrete}' no callback_lembrete para PIX gerado.")
             return
-
 
     if mensagem:
         try:
@@ -216,7 +212,6 @@ async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=keyboard_lembrete,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
-            # Adiciona message_id para lembretes de idade, para poder editá-los depois
             if estado_esperado_no_job == "aguardando_verificacao_idade" and sent_reminder_message:
                 if user_id in user_states and isinstance(user_states[user_id], dict):
                     if 'age_verification_message_ids' not in user_states[user_id] or \
@@ -319,7 +314,7 @@ async def handle_idade(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if query.message and msg_id == query.message.message_id:
                 continue 
             try:
-                await context.bot.delete_message(
+                await context.bot.delete_message( 
                     chat_id=chat_id,
                     message_id=msg_id
                 )
@@ -349,7 +344,7 @@ async def handle_idade(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     text=texto_idade_nao, 
                     parse_mode=ParseMode.MARKDOWN_V2 
                 )
-            else: # Se a mensagem original foi deletada, envia uma nova
+            else: 
                 await context.bot.send_message(chat_id=chat_id, text=texto_idade_nao, parse_mode=ParseMode.MARKDOWN_V2)
         except telegram.error.BadRequest as e:
             if "message is not modified" in str(e).lower():
@@ -384,9 +379,6 @@ async def handle_idade(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if "message is not modified" in str(e).lower():
                 logger.warning(f"Mensagem de boas_vindas não modificada para user {user_id}: {e}")
             elif "message to edit not found" in str(e).lower():
-                # Se a msg original foi deletada, envia como nova msg (embora isso possa ser confuso para o usuário)
-                # Idealmente, a msg original não seria deletada se fosse a que originou o callback.
-                # A lógica atual já evita deletar query.message.message_id, então isso é um fallback.
                 await context.bot.send_message(chat_id=chat_id, text=texto_boas_vindas, parse_mode=ParseMode.MARKDOWN_V2)
             else:
                 logger.error(f"Erro ao editar mensagem de boas_vindas para user {user_id}: {e}", exc_info=True)
@@ -482,13 +474,12 @@ async def mostrar_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except telegram.error.BadRequest as e:
         if "message is not modified" in str(e).lower():
             logger.warning(f"Mensagem de planos não modificada para user {user_id}: {e}")
-        else: # Se for outro erro, como "message to edit not found", tenta enviar uma nova
-            if "message to edit not found" in str(e).lower():
-                logger.warning(f"Mensagem original para planos não encontrada para user {user_id}, enviando nova: {e}")
-                await context.bot.send_message(chat_id=user_id, text=texto_planos, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
-            else:
-                logger.error(f"Erro ao mostrar planos para user {user_id}: {e}", exc_info=True)
-                return 
+        elif "message to edit not found" in str(e).lower():
+            logger.warning(f"Mensagem original para planos não encontrada para user {user_id}, enviando nova: {e}")
+            await context.bot.send_message(chat_id=user_id, text=texto_planos, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
+        else:
+            logger.error(f"Erro ao mostrar planos para user {user_id}: {e}", exc_info=True)
+            return 
 
     job_context_name_base = f"{JOB_LEMBRETE_PLANOS_PREFIX}{user_id}" 
     
@@ -588,13 +579,16 @@ async def detalhes_plano(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for job_obj in jobs_agendados: 
             if job_obj: job_obj.schedule_removal()
 
-# --- O RESTANTE DO CÓDIGO (gerar_pix, copiar_pix, ja_paguei, etc.) PERMANECE O MESMO ---
-# --- ATÉ configure_application() E O BLOCO if __name__ == '__main__': ---
+# --- O RESTANTE DO CÓDIGO (gerar_pix, copiar_pix, ja_paguei, receber_comprovante, etc.)
+# --- PERMANECE IGUAL AO QUE VOCÊ JÁ TINHA E ESTAVA FUNCIONAL ---
+# --- APENAS CERTIFIQUE-SE DE CHAMAR remover_jobs_lembrete_anteriores(user_id, context) ---
+# --- E ATUALIZAR user_states[user_id] = {"state": "novo_estado", "pending_reminder_jobs": []} ---
+# --- NAS FUNÇÕES QUE SIGNIFICAM UM AVANÇO NO FUNIL ---
 
 async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
-    chat_id = query.message.chat_id # Adicionado para consistência com outros agendamentos
+    chat_id = query.message.chat_id 
     await query.answer()
     
     logger.info(f"[GERAR_PIX] User: {user_id}. Estado ANTES: {user_states.get(user_id, {}).get('state')}")
@@ -660,8 +654,7 @@ async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text=admin_notify_text, 
         parse_mode=ParseMode.MARKDOWN_V2
     )
-
-    # Agendar lembretes para "PIX gerado"
+    
     job_context_name_base = f"{JOB_LEMBRETE_PIX_GERADO_PREFIX}{user_id}_{plano_key}"
     delays_lembrete = {"1min_pix": 1*60, "5min_pix": 5*60, "10min_pix": 10*60} # PRODUÇÃO
     # delays_lembrete = {"1min_pix": 10, "5min_pix": 20, "10min_pix": 30} # TESTE
@@ -682,7 +675,6 @@ async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.warning(f"Estado para user {user_id} não era um dicionário ou não existia ao tentar armazenar jobs de lembrete de PIX gerado. Cancelando jobs.")
         for job_obj in jobs_agendados: 
             if job_obj: job_obj.schedule_removal()
-
 
 async def copiar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -714,6 +706,8 @@ async def ja_paguei(update: Update, context: ContextTypes.DEFAULT_TYPE):
         texto_ja_paguei, 
         parse_mode=ParseMode.MARKDOWN_V2
     )
+
+# ... (COLE O RESTANTE DO CÓDIGO A PARTIR DAQUI, DA VERSÃO ANTERIORMENTE FUNCIONAL)
 
 async def receber_comprovante(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
