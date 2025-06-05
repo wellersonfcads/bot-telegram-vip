@@ -148,7 +148,7 @@ async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"Não foi possível deletar mensagem de lembrete anterior (ID: {msg_id_para_deletar}): {e}")
 
     mensagem = ""
-    keyboard_lembrete = None
+    keyboard_lembrete = None  # Teclado começa como nulo
     sent_reminder_message = None
 
     if estado_esperado_no_job == "aguardando_verificacao_idade":
@@ -165,7 +165,6 @@ async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("❌ Não tenho 18 anos", callback_data="idade_nao")]
             ])
 
-    # ... (outros elif para visualizando_planos, visualizando_detalhes_)
     elif estado_esperado_no_job == "visualizando_planos":
         if delay == "1min":
             mensagem = "Ei, vi que você está de olho nos meus planos VIP 👀\\! Qual deles chamou mais sua atenção, amor? Não perca tempo, o conteúdo exclusivo te espera\\! 🔥"
@@ -199,21 +198,22 @@ async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"Chave de plano inválida '{plano_key_lembrete}' no callback_lembrete para detalhes.")
             return
             
+    # --- SEÇÃO MODIFICADA ---
     elif estado_esperado_no_job.startswith("gerou_pix_"):
         if plano_key_lembrete and plano_key_lembrete in PLANOS:
             plano_nome_escapado = escape_markdown_v2(PLANOS[plano_key_lembrete]['nome'])
-            if delay == "1min_pix":
-                mensagem = f"Amor, seu PIX para o *{plano_nome_escapado}* foi gerado com sucesso\\! 🎉 Agora é só pagar e me enviar o comprovante para liberar seu acesso total\\! Estou te esperando\\! 😉"
-            elif delay == "5min_pix":
-                mensagem = f"Só um lembrete carinhoso, seu PIX para o *{plano_nome_escapado}* ainda está aguardando o pagamento\\. Não perca a chance de entrar no meu mundo exclusivo\\! 🔥"
-            elif delay == "10min_pix":
-                mensagem = f"Última chamada, amor\\! Seu acesso ao *{plano_nome_escapado}* está quase lá\\. Faça o pagamento do PIX e me envie o comprovante para não ficar de fora da diversão\\! 😈"
             
-            if mensagem:
-                keyboard_lembrete = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("✅ Já Paguei - Enviar Comprovante", callback_data=f"ja_paguei_{plano_key_lembrete}")],
-                    [InlineKeyboardButton("📋 Ver PIX Novamente", callback_data=f"gerar_pix_{plano_key_lembrete}")]
-                ])
+            # Textos atualizados para instruir o usuário a usar o botão da mensagem anterior
+            if delay == "1min_pix":
+                mensagem = f"Amor, seu PIX para o *{plano_nome_escapado}* foi gerado\\! 🎉 Após pagar, **clique no botão '✅ Já Paguei' na mensagem acima** para me enviar o comprovante\\! Estou te esperando\\! 😉"
+            elif delay == "5min_pix":
+                mensagem = f"Só um lembrete carinhoso, seu PIX para o *{plano_nome_escapado}* ainda está aguardando o pagamento\\. Assim que pagar, é só clicar no botão '✅ Já Paguei' lá em cima para enviar seu comprovante\\! 🔥"
+            elif delay == "10min_pix":
+                mensagem = f"Última chamada, amor\\! Seu acesso ao *{plano_nome_escapado}* está quase lá\\. Faça o pagamento e **clique no botão '✅ Já Paguei' na mensagem anterior** para não ficar de fora da diversão\\! 😈"
+            
+            # A criação de novos botões para este lembrete foi REMOVIDA.
+            # keyboard_lembrete permanecerá None.
+            
         else:
             logger.warning(f"Chave de plano inválida '{plano_key_lembrete}' no callback_lembrete para PIX gerado.")
             return
@@ -223,7 +223,7 @@ async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
             sent_reminder_message = await context.bot.send_message(
                 chat_id=chat_id,
                 text=mensagem,
-                reply_markup=keyboard_lembrete,
+                reply_markup=keyboard_lembrete, # Será None para os lembretes de comprovante
                 parse_mode=ParseMode.MARKDOWN_V2
             )
             # Armazena o ID da nova mensagem de lembrete no estado do usuário
@@ -236,6 +236,7 @@ async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"BadRequest ao enviar lembrete {delay} para user {user_id}: {br_err}", exc_info=True)
         except Exception as e:
             logger.error(f"Erro geral ao enviar lembrete {delay} para user {user_id}: {e}", exc_info=True)
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
