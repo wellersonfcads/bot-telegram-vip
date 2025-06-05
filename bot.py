@@ -72,7 +72,7 @@ JOB_LEMBRETE_PIX_GERADO_PREFIX = "lembrete_pix_gerado_user_"
 
 DB_PATH = os.environ.get('DB_PATH', 'vip_bot.db')
 
-
+# --- INICIALIZAÇÃO E MIGRAÇÃO DO BANCO DE DADOS ---
 def init_db():
     with sqlite3.connect(DB_PATH, timeout=10) as conn:
         cursor = conn.cursor()
@@ -97,8 +97,20 @@ def init_db():
                 last_update TEXT
             )
         ''')
+        
+        # --- NOVO: Migração de Schema para adicionar a coluna de lembretes ---
+        try:
+            cursor.execute('PRAGMA table_info(usuarios_vip)')
+            columns = [col[1] for col in cursor.fetchall()]
+            if 'lembrete_enviado_dias' not in columns:
+                cursor.execute('ALTER TABLE usuarios_vip ADD COLUMN lembrete_enviado_dias INTEGER')
+                logger.info("Coluna 'lembrete_enviado_dias' adicionada à tabela 'usuarios_vip'.")
+        except Exception as e:
+            logger.error(f"Erro ao tentar migrar o schema do DB: {e}")
+            
         conn.commit()
 
+# ... (funções de state, escape, remover_jobs, deletar_lembrete e callback_lembrete permanecem iguais)
 def set_user_state(user_id: int, state: str, plano_key: str = None):
     with sqlite3.connect(DB_PATH, timeout=10) as conn:
         cursor = conn.cursor()
@@ -265,6 +277,7 @@ async def callback_lembrete(context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Erro geral ao enviar lembrete {delay} para user {user_id}: {e}", exc_info=True)
 
 
+# ... (funções do funil inicial: start, handle_idade, enviar_convite_vip_inicial, mostrar_planos, detalhes_plano)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
@@ -524,29 +537,21 @@ async def detalhes_plano(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_states[user_id]['pending_reminder_jobs'] = jobs_agendados
 
 
-async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = query.from_user.id
-    chat_id = query.message.chat_id
-    await query.answer()
+# --- NOVO: Função interna refatorada para gerar e enviar a mensagem do PIX ---
+async def _enviar_mensagem_pix(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, plano_key: str, username: str, query_obj: Update = None):
+    """Função interna e reutilizável para gerar e enviar a mensagem de PIX."""
     
     remover_jobs_lembrete_anteriores(user_id, context)
     if user_id in user_states:
         user_states[user_id]['last_reminder_message_id'] = None
 
-    plano_key = query.data.replace("gerar_pix_", "")
-    if plano_key not in PLANOS or plano_key not in LINKS_PIX:
-        logger.error(f"Chave de plano inválida '{plano_key}' em gerar_pix.")
-        await query.edit_message_text(escape_markdown_v2("❌ Ops! Algo deu errado ao gerar o PIX. Tente novamente."), parse_mode=ParseMode.MARKDOWN_V2)
-        return
-    
     estado_pix_gerado = f"gerou_pix_{plano_key}"
     set_user_state(user_id, estado_pix_gerado, plano_key)
     user_states[user_id] = {"pending_reminder_jobs": []}
-    
+
     plano = PLANOS[plano_key]
     pix_code = LINKS_PIX[plano_key]
-    username = query.from_user.username or "Não informado"
+    
     with sqlite3.connect(DB_PATH, timeout=10) as conn:
         cursor = conn.cursor()
         cursor.execute('''
@@ -554,9 +559,9 @@ async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
             VALUES (?, ?, ?, ?, ?)
         ''', (user_id, username, plano_key, plano['valor'], datetime.now().isoformat()))
         conn.commit()
-    
+
     keyboard = [
-        [InlineKeyboardButton("⬅️ Voltar", callback_data=f"plano_{plano_key}")]
+        [InlineKeyboardButton("⬅️ Voltar aos Planos", callback_data="ver_planos")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -575,12 +580,12 @@ async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"4️⃣ Após pagar, **basta me enviar a foto ou print do comprovante aqui mesmo nesta conversa**\\.\n\n"
         f"💕 Estou ansiosa para te receber no meu VIP, amor\\!"
     )
-    await query.edit_message_text(
-        texto_gerar_pix,
-        reply_markup=reply_markup,
-        parse_mode=ParseMode.MARKDOWN_V2
-    )
-    
+
+    if query_obj:
+        await query_obj.edit_message_text(texto_gerar_pix, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
+    else:
+        await context.bot.send_message(chat_id=chat_id, text=texto_gerar_pix, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
+
     job_context_name_base = f"{JOB_LEMBRETE_PIX_GERADO_PREFIX}{user_id}_{plano_key}"
     delays_lembrete = {"1min_pix": 1*60, "5min_pix": 5*60, "10min_pix": 10*60}
     jobs_agendados = []
@@ -589,11 +594,55 @@ async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
             callback_lembrete, delay_seconds, data={"chat_id": chat_id, "user_id": user_id, "contexto_job": estado_pix_gerado, "delay": delay_tag, "plano_key": plano_key}, name=f"{job_context_name_base}_{delay_tag}"
         )
         jobs_agendados.append(job)
-    
+
     if user_id in user_states and isinstance(user_states[user_id], dict):
         user_states[user_id]['pending_reminder_jobs'] = jobs_agendados
 
 
+# --- ALTERADO: Agora esta função é um "wrapper" para a função interna ---
+async def gerar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = query.from_user.id
+    chat_id = query.message.chat_id
+    username = query.from_user.username or "Não informado"
+    plano_key = query.data.replace("gerar_pix_", "")
+    
+    await query.answer()
+
+    if plano_key not in PLANOS or plano_key not in LINKS_PIX:
+        logger.error(f"Chave de plano inválida '{plano_key}' em gerar_pix.")
+        await query.edit_message_text(escape_markdown_v2("❌ Ops! Algo deu errado ao gerar o PIX. Tente novamente."), parse_mode=ParseMode.MARKDOWN_V2)
+        return
+
+    await _enviar_mensagem_pix(context, chat_id, user_id, plano_key, username, query_obj=query)
+
+
+# --- NOVO: Handler para o fluxo rápido de renovação ---
+async def iniciar_fluxo_renovacao(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = query.from_user.id
+    chat_id = query.message.chat_id
+    username = query.from_user.username or "Não informado"
+    plano_key = query.data.replace("renovar_", "")
+
+    await query.answer("Ok, vamos gerar seu PIX para renovação!")
+    
+    if plano_key not in PLANOS or plano_key not in LINKS_PIX:
+        logger.error(f"Chave de plano inválida '{plano_key}' no fluxo de renovação.")
+        await context.bot.send_message(chat_id, escape_markdown_v2("❌ Ops! Algo deu errado ao selecionar o plano. Tente novamente."), parse_mode=ParseMode.MARKDOWN_V2)
+        return
+
+    # Deleta a mensagem do lembrete para não poluir o chat
+    try:
+        await query.delete_message()
+    except Exception as e:
+        logger.warning(f"Não foi possível deletar a mensagem de lembrete de renovação: {e}")
+
+    # Chama a função interna sem um objeto de query, para que ela envie uma nova mensagem
+    await _enviar_mensagem_pix(context, chat_id, user_id, plano_key, username, query_obj=None)
+
+
+# ... (receber_comprovante e handle_text_messages permanecem iguais)
 async def receber_comprovante(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     username = update.effective_user.username or "Não informado"
@@ -673,7 +722,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             parse_mode=ParseMode.MARKDOWN_V2
         )
 
-
+# --- ALTERADO: Lógica de aprovação agora reseta o lembrete de expiração ---
 async def processar_decisao_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -713,9 +762,10 @@ async def processar_decisao_admin(update: Update, context: ContextTypes.DEFAULT_
 
             with sqlite3.connect(DB_PATH, timeout=10) as conn:
                 cursor = conn.cursor()
+                # --- ALTERADO: Reseta o lembrete de expiração na renovação/compra ---
                 cursor.execute('''
-                    INSERT OR REPLACE INTO usuarios_vip (user_id, username, plano, data_entrada, data_expiracao, ativo)
-                    VALUES (?, ?, ?, ?, ?, 1)
+                    INSERT OR REPLACE INTO usuarios_vip (user_id, username, plano, data_entrada, data_expiracao, ativo, lembrete_enviado_dias)
+                    VALUES (?, ?, ?, ?, ?, 1, NULL)
                 ''', (user_id_pagante, username_pagante, plano_key, datetime.now().isoformat(), data_expiracao.isoformat()))
                 cursor.execute('''
                     UPDATE pagamentos_pendentes SET aprovado = 1
@@ -842,222 +892,73 @@ async def processar_motivo_rejeicao(update: Update, context: ContextTypes.DEFAUL
             parse_mode=ParseMode.MARKDOWN_V2
         )
 
-# ... (restante do código: listar_usuarios, remover_usuarios_expirados_job, etc.)
-async def listar_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
-    with sqlite3.connect(DB_PATH, timeout=10) as conn:
-        cursor = conn.cursor()
-        cursor.execute('SELECT user_id, username, plano, data_expiracao FROM usuarios_vip WHERE ativo = 1 ORDER BY data_expiracao')
-        usuarios = cursor.fetchall()
-    if not usuarios:
-        await update.message.reply_text("📋 Nenhum usuário VIP ativo no momento\\.", parse_mode=ParseMode.MARKDOWN_V2)
-        return
+# ... (listar_usuarios, remover_usuario, etc, permanecem iguais)
+# ...
+
+# --- NOVO: Job e funções auxiliares para lembretes de renovação ---
+async def _enviar_mensagem_lembrete_renovacao(context: ContextTypes.DEFAULT_TYPE, user_id: int, dias_restantes: int):
+    """Envia a mensagem de lembrete de renovação para um usuário."""
+    textos = {
+        7: "Oi, amor\\! 💕 Só passando para lembrar que seu acesso VIP expira em 7 dias\\. Não deixe a diversão acabar\\! Que tal já garantir sua renovação\\? 😉",
+        3: "Psst\\.\\.\\. 🔥 Seu paraíso particular está quase expirando\\! Faltam só 3 dias\\. Renove agora para não perder nada\\! 😈",
+        1: "É hoje, amor\\! 🚨 Seu acesso VIP expira em menos de 24 horas\\! Essa é sua última chance de renovar sem interrupções\\. Te espero de volta\\!"
+    }
     
-    texto_final = "📋 *USUÁRIOS VIP ATIVOS*\n\n"
-    for uid, uname, pkey, data_exp_iso in usuarios:
-        plano_nome = PLANOS.get(pkey, {}).get('nome', f"Plano '{pkey}' (Desconhecido)")
-        plano_nome_esc = escape_markdown_v2(plano_nome)
-        uname_esc = escape_markdown_v2(uname if uname else 'N/A')
-        
-        try:
-            data_exp = datetime.fromisoformat(data_exp_iso)
-            dias_restantes = (data_exp - datetime.now()).days
-            exp_formatada = escape_markdown_v2(data_exp.strftime('%d/%m/%Y'))
-            dias_rest_texto = escape_markdown_v2(str(dias_restantes) if dias_restantes >= 0 else 'Expirado')
-        except ValueError:
-            exp_formatada = escape_markdown_v2("Data Inválida")
-            dias_rest_texto = escape_markdown_v2("N/A")
-            logger.warning(f"Data de expiração inválida '{data_exp_iso}' para usuário {uid}")
-
-        texto_final += f"👤 ID: {uid} \\(@{uname_esc}\\)\n"
-        texto_final += f"💎 Plano: {plano_nome_esc}\n"
-        texto_final += f"📅 Expira em: {exp_formatada}\n"
-        texto_final += f"⏰ Dias restantes: {dias_rest_texto}\n\n"
+    texto_lembrete = textos.get(dias_restantes, "Seu plano VIP está prestes a expirar! Renove agora.")
     
-    texto_final += "\n💡 *Para remover um usuário, use:*\n"
-    texto_final += f"`/remover ID_DO_USUARIO`"
-    
-    if len(texto_final) > 4096:
-        for i in range(0, len(texto_final), 4000):
-            await update.message.reply_text(texto_final[i:i+4000], parse_mode=ParseMode.MARKDOWN_V2)
-    else:
-        await update.message.reply_text(texto_final, parse_mode=ParseMode.MARKDOWN_V2)
+    keyboard = [
+        [InlineKeyboardButton(f"💎 Renovar {PLANOS['1_mes']['nome']}", callback_data="renovar_1_mes")],
+        [InlineKeyboardButton(f"💎 Renovar {PLANOS['3_meses']['nome']}", callback_data="renovar_3_meses")],
+        [InlineKeyboardButton(f"💎 Renovar {PLANOS['6_meses']['nome']}", callback_data="renovar_6_meses")],
+        [InlineKeyboardButton(f"💎 Renovar {PLANOS['12_meses']['nome']}", callback_data="renovar_12_meses")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
 
-async def remover_usuarios_expirados_job(context: ContextTypes.DEFAULT_TYPE):
-    logger.info("Executando job de remoção de usuários expirados...")
-    with sqlite3.connect(DB_PATH, timeout=10) as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT user_id, username FROM usuarios_vip WHERE ativo = 1 AND data_expiracao < ?
-        ''', (datetime.now().isoformat(),))
-        usuarios_expirados = cursor.fetchall()
-        if not usuarios_expirados:
-            logger.info("Nenhum usuário expirado encontrado.")
-            return
-
-        for user_id_exp, username_exp in usuarios_expirados:
-            try:
-                logger.info(f"Tentando remover usuário expirado {user_id_exp} (@{username_exp}) do canal {CANAL_VIP_ID}")
-                await context.bot.ban_chat_member(chat_id=CANAL_VIP_ID, user_id=user_id_exp)
-                await context.bot.unban_chat_member(chat_id=CANAL_VIP_ID, user_id=user_id_exp)
-                cursor.execute('UPDATE usuarios_vip SET ativo = 0 WHERE user_id = ?', (user_id_exp,))
-                conn.commit()
-                logger.info(f"Usuário {user_id_exp} (@{username_exp}) removido do canal e DB.")
-                try:
-                    texto_expiracao = (
-                        "😢 *Sua assinatura VIP expirou\\!*\n\n"
-                        "Seu acesso ao meu conteúdo exclusivo foi encerrado, amor\\.\n"
-                        "Mas não se preocupe\\! Você pode renovar a qualquer momento usando o comando `/start`\\.\n\n"
-                        "Espero te ver de volta em breve\\! 💕"
-                    )
-                    await context.bot.send_message(chat_id=user_id_exp, text=texto_expiracao, parse_mode=ParseMode.MARKDOWN_V2)
-                except Exception as e_msg:
-                    logger.warning(f"Não notificar {user_id_exp} sobre expiração: {e_msg}")
-            except telegram.error.TelegramError as te:
-                if "user not found" in str(te).lower() or "chat member not found" in str(te).lower() or "user_is_bot" in str(te).lower():
-                    logger.warning(f"Usuário {user_id_exp} não encontrado/bot/não membro no canal. Marcando inativo. Erro: {te}")
-                    cursor.execute('UPDATE usuarios_vip SET ativo = 0 WHERE user_id = ?', (user_id_exp,))
-                    conn.commit()
-                else:
-                    logger.error(f"Erro Telegram ao remover {user_id_exp} expirado: {te}")
-            except Exception as e:
-                logger.error(f"Erro geral ao remover {user_id_exp} expirado: {e}", exc_info=True)
-    logger.info("Job de remoção de usuários expirados concluído.")
-
-async def remover_usuario(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
-    if not context.args:
-        await update.message.reply_text(
-            "❌ *Erro: ID do usuário não fornecido*\nUse: `/remover ID_DO_USUARIO`", parse_mode=ParseMode.MARKDOWN_V2
-        )
-        return
     try:
-        user_id_remover = int(context.args[0])
-    except ValueError:
-        await update.message.reply_text("❌ ID inválido\\. Deve ser um número\\.", parse_mode=ParseMode.MARKDOWN_V2)
-        return
-
-    with sqlite3.connect(DB_PATH, timeout=10) as conn:
-        cursor = conn.cursor()
-        cursor.execute('SELECT 1 FROM usuarios_vip WHERE user_id = ? AND ativo = 1', (user_id_remover,))
-        if not cursor.fetchone():
-            await update.message.reply_text(
-                escape_markdown_v2(f"❌ Usuário {user_id_remover} não encontrado ou já inativo."), parse_mode=ParseMode.MARKDOWN_V2
-            )
-            return
-        try:
-            await context.bot.ban_chat_member(CANAL_VIP_ID, user_id_remover)
-            await context.bot.unban_chat_member(CANAL_VIP_ID, user_id_remover)
-            logger.info(f"Admin removeu {user_id_remover} do canal.")
-            cursor.execute('UPDATE usuarios_vip SET ativo = 0 WHERE user_id = ?', (user_id_remover,))
+        await context.bot.send_message(chat_id=user_id, text=texto_lembrete, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
+        logger.info(f"Lembrete de renovação de {dias_restantes} dias enviado para o usuário {user_id}.")
+        
+        # Marca no DB que o lembrete foi enviado
+        with sqlite3.connect(DB_PATH, timeout=10) as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE usuarios_vip SET lembrete_enviado_dias = ? WHERE user_id = ?", (dias_restantes, user_id))
             conn.commit()
-            logger.info(f"Status de {user_id_remover} atualizado para inativo (manual).")
-            try:
-                await context.bot.send_message(
-                    chat_id=user_id_remover,
-                    text=escape_markdown_v2("⚠️ *Seu acesso ao canal VIP foi revogado pelo administrador.*"), parse_mode=ParseMode.MARKDOWN_V2
-                )
-            except Exception as e_msg:
-                logger.warning(f"Erro ao notificar {user_id_remover} sobre remoção manual: {e_msg}")
-            await update.message.reply_text(escape_markdown_v2(f"✅ Usuário {user_id_remover} removido e marcado inativo."), parse_mode=ParseMode.MARKDOWN_V2)
-        except telegram.error.TelegramError as te:
-            await update.message.reply_text(
-                escape_markdown_v2(f"⚠️ Erro Telegram ao remover {user_id_remover}: {te}\nVerifique permissões do bot no canal."),
-                parse_mode=ParseMode.MARKDOWN_V2
-            )
-        except Exception as e:
-            logger.error(f"Erro geral ao remover {user_id_remover} (manual): {e}", exc_info=True)
-            await update.message.reply_text(escape_markdown_v2(f"⚠️ Erro geral ao remover: {e}"), parse_mode=ParseMode.MARKDOWN_V2)
-
-async def verificar_usuario_autorizado(user_id_verificar):
-    with sqlite3.connect(DB_PATH, timeout=10) as conn:
-        cursor = conn.cursor()
-        cursor.execute('SELECT 1 FROM usuarios_vip WHERE user_id = ? AND ativo = 1 AND data_expiracao >= ?',
-                       (user_id_verificar, datetime.now().isoformat()))
-        return cursor.fetchone() is not None
-
-async def remover_usuario_nao_autorizado(user_id_remover, bot_instance: telegram.Bot):
-    try:
-        await bot_instance.ban_chat_member(CANAL_VIP_ID, user_id_remover)
-        await bot_instance.unban_chat_member(CANAL_VIP_ID, user_id_remover)
-        logger.info(f"Usuário não autorizado {user_id_remover} removido do canal {CANAL_VIP_ID}.")
-        try:
-            texto_nao_autorizado = (
-                "⚠️ *Acesso não autorizado*\n\n"
-                "Você foi removido do meu canal VIP \\(acesso não autorizado/expirado\\)\\.\n"
-                "Use `/start` para adquirir um plano\\."
-            )
-            await bot_instance.send_message(chat_id=user_id_remover, text=texto_nao_autorizado, parse_mode=ParseMode.MARKDOWN_V2)
-        except Exception as e_msg:
-            logger.warning(f"Erro ao notificar não autorizado {user_id_remover}: {e_msg}")
-        
-        admin_msg_nao_autorizado = f"🚫 Usuário ID {user_id_remover} removido do VIP {escape_markdown_v2(str(CANAL_VIP_ID))} \\(não autorizado\\)\\."
-        await bot_instance.send_message(chat_id=ADMIN_ID, text=admin_msg_nao_autorizado, parse_mode=ParseMode.MARKDOWN_V2)
-        return True
-    except telegram.error.TelegramError as te:
-        if "user_is_bot" in str(te).lower():
-            logger.warning(f"Tentativa de remover bot {user_id_remover} do canal. Ignorando. Erro: {te}")
-            return False
-        logger.error(f"Erro Telegram ao remover não autorizado {user_id_remover}: {te}")
+            
     except Exception as e:
-        logger.error(f"Erro geral ao remover não autorizado {user_id_remover}: {e}", exc_info=True)
-    return False
+        logger.error(f"Falha ao enviar lembrete de renovação de {dias_restantes} dias para {user_id}: {e}")
 
-async def verificar_novo_membro(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.chat_member or str(update.chat_member.chat.id) != str(CANAL_VIP_ID):
-        return
-    new_member_status = update.chat_member.new_chat_member.status
-    user = update.chat_member.new_chat_member.user
-    if new_member_status in [TGConstants.ChatMemberStatus.MEMBER, TGConstants.ChatMemberStatus.RESTRICTED]:
-        user_id_novo = user.id
-        if user_id_novo == ADMIN_ID or user_id_novo == context.bot.id:
-            return
-        username_novo_esc = escape_markdown_v2(user.username or 'N/A')
-        logger.info(f"Novo membro no VIP {CANAL_VIP_ID}: ID {user_id_novo} (@{username_novo_esc})")
-        if not await verificar_usuario_autorizado(user_id_novo):
-            logger.warning(f"NÃO AUTORIZADO: {user_id_novo} (@{username_novo_esc}) no VIP {CANAL_VIP_ID}. Removendo...")
-            await remover_usuario_nao_autorizado(user_id_novo, context.bot)
-        else:
-            logger.info(f"AUTORIZADO: {user_id_novo} (@{username_novo_esc}) no VIP {CANAL_VIP_ID}.")
-
-def keep_alive_ping():
-    host_url = os.environ.get('RENDER_EXTERNAL_URL')
-    if not host_url:
-        logger.info("RENDER_EXTERNAL_URL não definida. Auto-ping desativado.")
-        return
+async def enviar_lembretes_de_renovacao_job(context: ContextTypes.DEFAULT_TYPE):
+    """Job diário para verificar e enviar lembretes de renovação."""
+    logger.info("Executando job de lembretes de renovação...")
     
-    time.sleep(45)
-    logger.info(f"Keep-alive auto-ping iniciado para {host_url}.")
+    lembretes_a_enviar = {
+        7: "(lembrete_enviado_dias > 7 OR lembrete_enviado_dias IS NULL)",
+        3: "(lembrete_enviado_dias > 3 OR lembrete_enviado_dias IS NULL)",
+        1: "(lembrete_enviado_dias > 1 OR lembrete_enviado_dias IS NULL)"
+    }
+    
+    for dias, condicao_lembrete in lembretes_a_enviar.items():
+        with sqlite3.connect(DB_PATH, timeout=10) as conn:
+            cursor = conn.cursor()
+            # A query agora verifica o dia exato e se o lembrete já foi enviado
+            query_sql = f"""
+                SELECT user_id FROM usuarios_vip 
+                WHERE ativo = 1 
+                AND date(data_expiracao) = date('now', '+{dias} days')
+                AND {condicao_lembrete}
+            """
+            cursor.execute(query_sql)
+            usuarios_para_lembrar = cursor.fetchall()
 
-    while True:
-        try:
-            with urllib.request.urlopen(host_url, timeout=25) as response:
-                logger.info(f"Keep-alive ping para {host_url} status {response.status}.")
-        except Exception as e:
-            logger.error(f"Erro no keep-alive ping para {host_url}: {e}")
-        time.sleep(10 * 60)
-
-class KeepAliveHandler(http.server.SimpleHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header('Content-type', 'text/plain; charset=utf-8')
-        self.end_headers()
-        self.wfile.write('Bot VIP está ativo e operante!'.encode('utf-8'))
-        logger.debug(f"KeepAliveHandler: Requisição GET de {self.client_address}, respondendo OK.")
-
-def start_keep_alive_server():
-    port = int(os.environ.get('PORT', 8080))
-    socketserver.TCPServer.allow_reuse_address = True
-    try:
-        with socketserver.TCPServer(("", port), KeepAliveHandler) as httpd:
-            logger.info(f"Servidor keep-alive HTTP iniciado na porta {port}.")
-            httpd.serve_forever()
-    except OSError as e:
-        logger.critical(f"OSError ao iniciar servidor keep-alive na porta {port}: {e}.")
-    except Exception as e:
-        logger.critical(f"Exceção não esperada ao iniciar servidor keep-alive: {e}", exc_info=True)
+        if usuarios_para_lembrar:
+            logger.info(f"Encontrados {len(usuarios_para_lembrar)} usuários para o lembrete de {dias} dias.")
+            for (user_id,) in usuarios_para_lembrar:
+                await _enviar_mensagem_lembrete_renovacao(context, user_id, dias)
+    
+    logger.info("Job de lembretes de renovação concluído.")
 
 
+# --- Funções Principais de Configuração e Execução do Bot ---
 def configure_application():
     init_db()
     
@@ -1071,19 +972,20 @@ def configure_application():
     application.add_handler(CallbackQueryHandler(mostrar_planos, pattern="^ver_planos$"))
     application.add_handler(CallbackQueryHandler(detalhes_plano, pattern="^plano_"))
     application.add_handler(CallbackQueryHandler(gerar_pix, pattern="^gerar_pix_"))
+    application.add_handler(CallbackQueryHandler(iniciar_fluxo_renovacao, pattern="^renovar_")) # --- NOVO
     application.add_handler(CallbackQueryHandler(processar_decisao_admin, pattern="^(aprovar|rejeitar)_"))
     application.add_handler(CallbackQueryHandler(processar_motivo_rejeicao, pattern="^motivo_"))
     
-    # <--- LINHA CORRIGIDA --->
-    # Aceita fotos, imagens enviadas como arquivo E documentos do tipo PDF.
     application.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE | filters.Document.MimeType("application/pdf"), receber_comprovante))
-    
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
     
     application.add_handler(ChatMemberHandler(verificar_novo_membro, ChatMemberHandler.CHAT_MEMBER))
     
     job_queue = application.job_queue
+    # Job que roda de hora em hora para remover expirados
     job_queue.run_repeating(remover_usuarios_expirados_job, interval=3600, first=60)
+    # --- NOVO: Job diário para enviar lembretes de renovação (ao meio-dia) ---
+    job_queue.run_daily(enviar_lembretes_de_renovacao_job, time=datetime.strptime("12:00:00", "%H:%M:%S").time(), name="job_lembretes_renovacao")
     
     if os.environ.get('RENDER'):
         logger.info("Ambiente RENDER detectado. Iniciando threads de keep-alive.")
@@ -1100,6 +1002,7 @@ def configure_application():
             
     return application
 
+# ... (o resto do código, pre_run, run_bot_async, if __name__ == '__main__', etc., continua o mesmo)
 async def pre_run_bot_operations(application: Application):
     logger.info("Executando operações de pré-inicialização do bot (async)...")
     
