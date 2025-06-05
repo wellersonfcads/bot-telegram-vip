@@ -4,7 +4,8 @@ import threading
 import time
 from datetime import datetime, timedelta
 import telegram
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, constants as TGConstants
+# --- ALTERADO: Importações adicionadas para o menu de comandos ---
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, BotCommandScopeDefault, BotCommandScopeChat
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ChatMemberHandler, filters, ContextTypes, Job
 from telegram.constants import ParseMode
 import os
@@ -1050,7 +1051,7 @@ async def verificar_novo_membro(update: Update, context: ContextTypes.DEFAULT_TY
         return
     new_member_status = update.chat_member.new_chat_member.status
     user = update.chat_member.new_chat_member.user
-    if new_member_status in [TGConstants.ChatMemberStatus.MEMBER, TGConstants.ChatMemberStatus.RESTRICTED]:
+    if new_member_status in [telegram.constants.ChatMemberStatus.MEMBER, telegram.constants.ChatMemberStatus.RESTRICTED]:
         user_id_novo = user.id
         if user_id_novo == ADMIN_ID or user_id_novo == context.bot.id:
             return
@@ -1158,6 +1159,56 @@ def start_keep_alive_server():
     except Exception as e:
         logger.critical(f"Exceção não esperada ao iniciar servidor keep-alive: {e}", exc_info=True)
 
+# --- NOVO: Função para o comando /meu_plano ---
+async def meu_plano_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_info = update.effective_user
+    nome_usuario = user_info.first_name
+
+    with sqlite3.connect(DB_PATH, timeout=10) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            'SELECT plano, data_expiracao FROM usuarios_vip WHERE user_id = ? AND ativo = 1',
+            (user_id,)
+        )
+        vip_info = cursor.fetchone()
+
+    if vip_info:
+        plano_key, data_exp_iso = vip_info
+        plano_nome = PLANOS.get(plano_key, {}).get('nome', 'Desconhecido')
+        
+        data_exp = datetime.fromisoformat(data_exp_iso)
+        data_exp_formatada = data_exp.strftime('%d/%m/%Y às %H:%M')
+        dias_restantes = (data_exp - datetime.now()).days
+
+        texto = (
+            f"Olá, {escape_markdown_v2(nome_usuario)}\\! 💕\n\n"
+            f"Aqui estão os detalhes do seu plano:\n"
+            f"💎 *Plano:* {escape_markdown_v2(plano_nome)}\n"
+            f"📅 *Expira em:* {data_exp_formatada}\n"
+            f"⏳ *Dias restantes:* {dias_restantes}\n\n"
+            f"Gostaria de renovar ou alterar seu plano?"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton(f"💎 Renovar {PLANOS['1_mes']['nome']}", callback_data="renovar_1_mes")],
+            [InlineKeyboardButton(f"💎 Renovar {PLANOS['3_meses']['nome']}", callback_data="renovar_3_meses")],
+            [InlineKeyboardButton(f"💎 Renovar {PLANOS['6_meses']['nome']}", callback_data="renovar_6_meses")],
+            [InlineKeyboardButton(f"💎 Renovar {PLANOS['12_meses']['nome']}", callback_data="renovar_12_meses")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+    else:
+        texto = (
+            f"Olá, {escape_markdown_v2(nome_usuario)}\\! 😊\n\n"
+            "Parece que você ainda não tem um plano VIP ativo comigo\\. "
+            "Que tal dar uma olhadinha nas opções que preparei para você?"
+        )
+        keyboard = [[InlineKeyboardButton("Ver Planos VIP", callback_data="ver_planos")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(texto, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
+
 
 def configure_application():
     init_db()
@@ -1165,6 +1216,7 @@ def configure_application():
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("meu_plano", meu_plano_command)) # --- ADICIONADO
     application.add_handler(CommandHandler("usuarios", listar_usuarios))
     application.add_handler(CommandHandler("remover", remover_usuario))
     
@@ -1251,7 +1303,28 @@ async def pre_run_bot_operations(application: Application):
     except Exception as e:
         logger.error(f"Erro inesperado durante delete_webhook: {e}", exc_info=True)
     
+    # --- NOVO: Definindo menus de comando personalizados ---
+    logger.info("Configurando menus de comandos personalizados...")
+
+    user_commands = [
+        BotCommand("start", "▶️ Iniciar o bot"),
+        BotCommand("meu_plano", "💎 Ver meu plano VIP")
+    ]
+    
+    admin_commands = user_commands + [
+        BotCommand("usuarios", "👥 Listar membros VIP"),
+        BotCommand("remover", "❌ Remover membro por ID")
+    ]
+
+    try:
+        await application.bot.set_my_commands(commands=user_commands, scope=BotCommandScopeDefault())
+        await application.bot.set_my_commands(commands=admin_commands, scope=BotCommandScopeChat(chat_id=ADMIN_ID))
+        logger.info("Menus de comando configurados com sucesso!")
+    except Exception as e:
+        logger.error(f"Falha ao configurar os menus de comando: {e}")
+
     logger.info("Operações de pré-inicialização do bot (async) concluídas.")
+
 
 async def run_bot_async():
     logger.info("Configurando a aplicação do bot...")
